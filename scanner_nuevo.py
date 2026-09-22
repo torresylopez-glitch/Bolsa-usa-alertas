@@ -21,207 +21,64 @@ TICKERS = [
 ]
 
 MIN_SCORE = 75
-
 PERIOD = "1y"
 INTERVAL = "1d"
-
-# Noticias que se consideran recientes
 NEWS_HOURS = 24
-
-# Número máximo de noticias que se analizarán por búsqueda
 MAX_NEWS = 8
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
-# ============================================================
-# NOMBRES DE EMPRESAS
-# ============================================================
-
 COMPANY_NAMES = {
-    "AAPL": "Apple",
-    "MSFT": "Microsoft",
-    "NVDA": "NVIDIA",
-    "AMZN": "Amazon",
-    "GOOGL": "Alphabet Google",
-    "META": "Meta Platforms Facebook",
-    "AVGO": "Broadcom",
-    "TSLA": "Tesla",
-    "AMD": "AMD",
-    "NFLX": "Netflix",
-    "JPM": "JPMorgan",
-    "V": "Visa",
-    "MA": "Mastercard",
-    "COST": "Costco",
-    "WMT": "Walmart",
-    "LLY": "Eli Lilly",
-    "XOM": "Exxon Mobil",
-    "ORCL": "Oracle",
-    "CRM": "Salesforce",
-    "PLTR": "Palantir",
-    "QCOM": "Qualcomm",
-    "MU": "Micron",
-    "INTC": "Intel",
-    "AMAT": "Applied Materials",
-    "UBER": "Uber",
-    "PANW": "Palo Alto Networks",
-    "ADBE": "Adobe"
+    "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA",
+    "AMZN": "Amazon", "GOOGL": "Alphabet Google",
+    "META": "Meta Platforms Facebook", "AVGO": "Broadcom",
+    "TSLA": "Tesla", "AMD": "AMD", "NFLX": "Netflix",
+    "JPM": "JPMorgan", "V": "Visa", "MA": "Mastercard",
+    "COST": "Costco", "WMT": "Walmart", "LLY": "Eli Lilly",
+    "XOM": "Exxon Mobil", "ORCL": "Oracle", "CRM": "Salesforce",
+    "PLTR": "Palantir", "QCOM": "Qualcomm", "MU": "Micron",
+    "INTC": "Intel", "AMAT": "Applied Materials", "UBER": "Uber",
+    "PANW": "Palo Alto Networks", "ADBE": "Adobe"
 }
 
-
-# ============================================================
-# TEMAS QUE PUEDEN AFECTAR AL MERCADO
-# ============================================================
-
-GENERAL_RISK_TERMS = [
-    "war",
-    "conflict",
-    "iran",
-    "israel",
-    "russia",
-    "ukraine",
-    "china",
-    "taiwan",
-    "sanctions",
-    "tariff",
-    "tariffs",
-    "fed",
-    "interest rates",
-    "inflation",
-    "recession",
-    "oil",
-    "crude",
-    "opec",
-    "hormuz",
-    "strait of hormuz",
-    "united nations",
-    "un",
-    "un security council",
-    "government",
-    "regulation",
-    "regulatory",
-    "antitrust"
-]
-
-
-# ============================================================
-# TEMAS POR SECTOR / EMPRESA
-# ============================================================
 
 SPECIAL_TOPICS = {
-    "XOM": [
-        "oil",
-        "crude",
-        "brent",
-        "wti",
-        "opec",
-        "iran",
-        "hormuz",
-        "strait of hormuz",
-        "middle east",
-        "sanctions",
-        "production",
-        "refinery",
-        "energy"
-    ],
-
-    "LLY": [
-        "weight loss",
-        "obesity",
-        "diabetes",
-        "drug approval",
-        "fda",
-        "clinical trial",
-        "pharmaceutical"
-    ],
-
-    "NVDA": [
-        "ai",
-        "artificial intelligence",
-        "chips",
-        "semiconductor",
-        "china",
-        "export restrictions",
-        "data center"
-    ],
-
-    "AMD": [
-        "ai",
-        "artificial intelligence",
-        "chips",
-        "semiconductor",
-        "china",
-        "export restrictions"
-    ],
-
-    "MU": [
-        "memory",
-        "dram",
-        "nand",
-        "semiconductor",
-        "chips",
-        "ai"
-    ],
-
-    "INTC": [
-        "semiconductor",
-        "chips",
-        "foundry",
-        "china",
-        "export restrictions"
-    ],
-
-    "AMAT": [
-        "semiconductor",
-        "chips",
-        "equipment",
-        "china",
-        "export restrictions"
-    ],
-
-    "TSLA": [
-        "electric vehicles",
-        "ev",
-        "china",
-        "tariffs",
-        "autonomous driving",
-        "robotaxi",
-        "regulation"
-    ]
+    "XOM": ["oil","crude","brent","wti","opec","iran","hormuz",
+            "strait of hormuz","middle east","sanctions","production",
+            "refinery","energy"],
+    "LLY": ["weight loss","obesity","diabetes","drug approval","fda",
+            "clinical trial","pharmaceutical"],
+    "NVDA": ["ai","artificial intelligence","chips","semiconductor",
+             "china","export restrictions","data center"],
+    "AMD": ["ai","artificial intelligence","chips","semiconductor",
+            "china","export restrictions"],
+    "MU": ["memory","dram","nand","semiconductor","chips","ai"],
+    "INTC": ["semiconductor","chips","foundry","china","export restrictions"],
+    "AMAT": ["semiconductor","chips","equipment","china","export restrictions"],
+    "TSLA": ["electric vehicles","ev","china","tariffs",
+             "autonomous driving","robotaxi","regulation"]
 }
 
-
-# ============================================================
-# RSI
-# ============================================================
 
 def rsi(series, period=14):
     delta = series.diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
     avg_gain = gain.ewm(
-        alpha=1 / period,
-        adjust=False,
-        min_periods=period
+        alpha=1 / period, adjust=False, min_periods=period
     ).mean()
 
     avg_loss = loss.ewm(
-        alpha=1 / period,
-        adjust=False,
-        min_periods=period
+        alpha=1 / period, adjust=False, min_periods=period
     ).mean()
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
 
     return 100 - (100 / (1 + rs))
 
-
-# ============================================================
-# ANÁLISIS TÉCNICO
-# ============================================================
 
 def analyze(ticker):
 
@@ -256,19 +113,15 @@ def analyze(ticker):
     df["SMA20"] = close.rolling(20).mean()
     df["SMA50"] = close.rolling(50).mean()
     df["SMA200"] = close.rolling(200).mean()
-
     df["RSI"] = rsi(close)
-
     df["VOL20"] = volume.rolling(20).mean()
 
     last = df.iloc[-1]
 
     price = float(last["Close"])
-
     sma20 = float(last["SMA20"])
     sma50 = float(last["SMA50"])
     sma200 = float(last["SMA200"])
-
     rsi14 = float(last["RSI"])
 
     vol_ratio = (
@@ -280,16 +133,12 @@ def analyze(ticker):
     support = float(df["Low"].tail(20).min())
 
     distance_support = (
-        (price - support) / price
-        if price
-        else math.inf
+        (price - support) / price if price else math.inf
     )
 
     score = 0
-
     reasons = []
 
-    # Tendencia
     if price > sma200:
         score += 20
         reasons.append("precio > media 200")
@@ -302,44 +151,31 @@ def analyze(ticker):
         score += 10
         reasons.append("precio > media 50")
 
-    # RSI
     if rsi14 < 30:
         score += 25
         reasons.append("RSI < 30")
-
     elif 30 <= rsi14 <= 45:
         score += 20
         reasons.append("RSI 30–45")
-
     elif rsi14 <= 55:
         score += 8
 
-    # Volumen
     if vol_ratio >= 1.5:
         score += 15
         reasons.append("volumen >= 1,5x media")
-
     elif vol_ratio >= 1.15:
         score += 8
         reasons.append("volumen > media")
 
-    # Soporte
     if distance_support <= 0.03:
         score += 20
         reasons.append("a <=3% del soporte")
-
     elif distance_support <= 0.06:
         score += 10
         reasons.append("a <=6% del soporte")
 
-    # --------------------------------------------------------
-    # NIVELES DE OPERACIÓN
-    # --------------------------------------------------------
-
     stop = support * 0.98
-
     risk = price - stop
-
     target1 = price + 2 * risk if risk > 0 else np.nan
     target2 = price + 3 * risk if risk > 0 else np.nan
 
@@ -360,38 +196,27 @@ def analyze(ticker):
     }
 
 
-# ============================================================
-# BÚSQUEDA DE NOTICIAS
-# ============================================================
-
 def google_news(query):
 
     try:
-
         encoded_query = quote(query)
 
         url = (
             "https://news.google.com/rss/search?"
             f"q={encoded_query}"
-            "&hl=en-US"
-            "&gl=US"
-            "&ceid=US:en"
+            "&hl=en-US&gl=US&ceid=US:en"
         )
 
         response = requests.get(
             url,
             timeout=20,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            }
+            headers={"User-Agent": "Mozilla/5.0"}
         )
 
         response.raise_for_status()
-
         root = ET.fromstring(response.content)
 
         news = []
-
         now = datetime.now(timezone.utc)
 
         for item in root.findall(".//item"):
@@ -409,7 +234,6 @@ def google_news(query):
                     pub_date,
                     "%a, %d %b %Y %H:%M:%S %Z"
                 ).replace(tzinfo=timezone.utc)
-
             except Exception:
                 dt = now
 
@@ -428,15 +252,9 @@ def google_news(query):
         return news
 
     except Exception as e:
-
         print(f"Error buscando noticias '{query}': {e}")
-
         return []
 
-
-# ============================================================
-# ELIMINAR NOTICIAS DUPLICADAS
-# ============================================================
 
 def unique_news(news):
 
@@ -451,7 +269,6 @@ def unique_news(news):
             continue
 
         seen.add(key)
-
         result.append(item)
 
     result.sort(
@@ -462,10 +279,6 @@ def unique_news(news):
     return result[:MAX_NEWS]
 
 
-# ============================================================
-# ANÁLISIS DE IMPACTO DE LAS NOTICIAS
-# ============================================================
-
 def analyze_news(ticker):
 
     company = COMPANY_NAMES.get(ticker, ticker)
@@ -473,25 +286,16 @@ def analyze_news(ticker):
     queries = [
         f'"{company}" {ticker}',
         f'"{company}" stock',
-        f'"{company}" news'
+        f'"{company}" news',
+        f'"{ticker}" market risk'
     ]
 
-    # Temas generales
-    queries.append(
-        f'"{ticker}" market risk'
-    )
-
-    # Temas especiales de cada empresa
     topics = SPECIAL_TOPICS.get(ticker, [])
 
     for topic in topics[:6]:
-        queries.append(
-            f'"{company}" {topic}'
-        )
+        queries.append(f'"{company}" {topic}')
 
-    # Buscar acontecimientos generales que puedan afectar
-    # a la empresa aunque no la nombren directamente.
-    if ticker in ["XOM"]:
+    if ticker == "XOM":
         queries.extend([
             "oil price OPEC Iran Hormuz",
             "Brent crude Middle East Iran",
@@ -516,15 +320,11 @@ def analyze_news(ticker):
     all_news = []
 
     for query in queries:
-
-        found = google_news(query)
-
-        all_news.extend(found)
+        all_news.extend(google_news(query))
 
     news = unique_news(all_news)
 
     if not news:
-
         return {
             "news": [],
             "positive": 0,
@@ -534,94 +334,39 @@ def analyze_news(ticker):
         }
 
     positive_words = [
-        "beats",
-        "beat",
-        "raises guidance",
-        "upgrade",
-        "upgraded",
-        "strong demand",
-        "record revenue",
-        "record profit",
-        "approval",
-        "approved",
-        "deal",
-        "contract",
-        "acquisition",
-        "buyback",
-        "dividend increase",
-        "bullish"
+        "beats","beat","raises guidance","upgrade","upgraded",
+        "strong demand","record revenue","record profit","approval",
+        "approved","deal","contract","acquisition","buyback",
+        "dividend increase","bullish"
     ]
 
     negative_words = [
-        "miss",
-        "misses",
-        "cuts guidance",
-        "downgrade",
-        "downgraded",
-        "lawsuit",
-        "investigation",
-        "probe",
-        "ban",
-        "banned",
-        "sanctions",
-        "tariff",
-        "tariffs",
-        "war",
-        "conflict",
-        "recession",
-        "layoffs",
-        "recall",
-        "warning",
-        "delay",
-        "weak demand",
-        "decline",
-        "falls",
-        "drop",
-        "crisis"
+        "miss","misses","cuts guidance","downgrade","downgraded",
+        "lawsuit","investigation","probe","ban","banned","sanctions",
+        "tariff","tariffs","war","conflict","recession","layoffs",
+        "recall","warning","delay","weak demand","decline","falls",
+        "drop","crisis"
     ]
 
     positive = 0
     negative = 0
 
-    analysed_titles = []
-
     for item in news:
 
         title = item["title"].lower()
 
-        p = sum(
-            1 for word in positive_words
-            if word in title
+        positive += sum(
+            1 for word in positive_words if word in title
         )
 
-        n = sum(
-            1 for word in negative_words
-            if word in title
+        negative += sum(
+            1 for word in negative_words if word in title
         )
-
-        positive += p
-        negative += n
-
-        analysed_titles.append(item)
-
-    # ========================================================
-    # RIESGOS ESPECÍFICOS
-    # ========================================================
 
     risk_keywords = [
-        "war",
-        "conflict",
-        "iran",
-        "hormuz",
-        "sanctions",
-        "tariff",
-        "tariffs",
-        "investigation",
-        "lawsuit",
-        "regulation",
-        "ban",
-        "recession",
-        "interest rates"
+        "war","conflict","iran","hormuz","sanctions","tariff",
+        "tariffs","investigation","lawsuit","regulation","ban",
+        "recession","interest rates"
     ]
 
     risk_hits = []
@@ -632,30 +377,17 @@ def analyze_news(ticker):
 
         for keyword in risk_keywords:
 
-            if keyword in title_lower:
+            if keyword in title_lower and keyword not in risk_hits:
                 risk_hits.append(keyword)
-
-    risk_hits = list(dict.fromkeys(risk_hits))
-
-    # ========================================================
-    # CLASIFICACIÓN
-    # ========================================================
 
     if negative >= positive + 2:
         risk = "NEGATIVO"
-
     elif positive >= negative + 2:
         risk = "POSITIVO"
-
     elif risk_hits:
         risk = "RIESGO RELEVANTE"
-
     else:
         risk = "MIXTO / NEUTRO"
-
-    # ========================================================
-    # RESUMEN
-    # ========================================================
 
     summary = []
 
@@ -688,10 +420,6 @@ def analyze_news(ticker):
     }
 
 
-# ============================================================
-# FORMATO DE NOTICIAS
-# ============================================================
-
 def format_news(news_data):
 
     news = news_data["news"]
@@ -718,9 +446,6 @@ def format_news(news_data):
     return "\n".join(lines)
 
 
-# ============================================================
-# ALERTA TELEGRAM
-# ============================================================
 def format_alert(x):
 
     news_data = x["news_data"]
@@ -759,17 +484,12 @@ def format_alert(x):
     )
 
 
-# ============================================================
-# TELEGRAM
-# ============================================================
-
 def send_telegram(message):
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
 
         print("\nTelegram no configurado. Resultado:\n")
         print(message)
-
         return
 
     url = (
@@ -777,7 +497,6 @@ def send_telegram(message):
         f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     )
 
-    # Telegram tiene límite de longitud por mensaje.
     if len(message) > 3900:
         message = message[:3900]
 
@@ -793,10 +512,6 @@ def send_telegram(message):
     response.raise_for_status()
 
 
-# ============================================================
-# PROGRAMA PRINCIPAL
-# ============================================================
-
 def main():
 
     results = []
@@ -807,11 +522,6 @@ def main():
     print()
 
     print("Analizando acciones...")
-
-    # --------------------------------------------------------
-    # PRIMERA FASE:
-    # ANÁLISIS TÉCNICO DE TODAS LAS ACCIONES
-    # --------------------------------------------------------
 
     for ticker in TICKERS:
 
@@ -834,11 +544,6 @@ def main():
                 f"{ticker}: error técnico ({e})"
             )
 
-    # --------------------------------------------------------
-    # SEGUNDA FASE:
-    # FILTRAR CANDIDATAS
-    # --------------------------------------------------------
-
     candidates = sorted(
         [
             r for r in results
@@ -853,11 +558,6 @@ def main():
         f"Candidatas >= {MIN_SCORE}/100: "
         f"{len(candidates)}"
     )
-
-    # --------------------------------------------------------
-    # TERCERA FASE:
-    # ANALIZAR NOTICIAS SOLO DE LAS CANDIDATAS
-    # --------------------------------------------------------
 
     signals = []
 
@@ -881,15 +581,6 @@ def main():
                 f"{news_data['risk']}"
             )
 
-            # ------------------------------------------------
-            # REGLA:
-            # NO descartamos automáticamente una acción por
-            # una noticia negativa.
-            #
-            # La noticia se incorpora a la alerta para que
-            # podamos ver el riesgo.
-            # ------------------------------------------------
-
             signals.append(candidate)
 
         except Exception as e:
@@ -908,10 +599,6 @@ def main():
 
             signals.append(candidate)
 
-    # --------------------------------------------------------
-    # SI NO HAY OPORTUNIDADES
-    # --------------------------------------------------------
-
     if not signals:
 
         message = (
@@ -927,10 +614,6 @@ def main():
 
         return
 
-    # --------------------------------------------------------
-    # ENVIAR ALERTAS
-    # --------------------------------------------------------
-
     for signal in signals:
 
         message = format_alert(signal)
@@ -942,10 +625,6 @@ def main():
         print()
         print("========================================")
 
-
-# ============================================================
-# EJECUCIÓN
-# ============================================================
 
 if __name__ == "__main__":
     main()
