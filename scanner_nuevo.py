@@ -14,15 +14,52 @@ from datetime import datetime, timezone, timedelta
 # CONFIGURACIÓN
 # ============================================================
 
-TICKERS = [
+# ACCIONES: se mantienen porque son acciones individuales.
+STOCK_TICKERS = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","AVGO","TSLA",
     "AMD","NFLX","JPM","V","MA","COST","WMT","LLY","XOM","ORCL",
-    "CRM","PLTR","QCOM","MU","INTC","AMAT","UBER","PANW","ADBE",
-    "SPY","QQQ","IWM","DIA","XLK","XLF","XLE","XLV","XLI","XLP",
-    "XLY","XLU","XLB","SMH","SOXX","GLD","SLV","TLT","HYG","EEM"
+    "CRM","PLTR","QCOM","MU","INTC","AMAT","UBER","PANW","ADBE"
 ]
 
+# ETF UCITS europeos negociados en Xetra.
+# Se usa el ticker de Yahoo Finance con .DE.
+# IMPORTANTE: que un producto sea UCITS no garantiza por sí solo
+# que aparezca en tu cuenta de DEGIRO; el programa muestra el ISIN
+# para que puedas comprobarlo en DEGIRO.
+ETF_TICKERS = [
+    "SXR8.DE",   # iShares Core S&P 500 UCITS ETF — ISIN IE00B5BMR087
+    "SXRV.DE",   # iShares NASDAQ 100 UCITS ETF — ISIN IE00B53SZB19
+    "ZPDF.DE",   # SPDR S&P U.S. Financials Select Sector UCITS ETF
+                 # — ISIN IE00BWBXM500
+]
+
+TICKERS = STOCK_TICKERS + ETF_TICKERS
+
+ETF_INFO = {
+    "SXR8.DE": {
+        "name": "iShares Core S&P 500 UCITS ETF",
+        "isin": "IE00B5BMR087",
+        "market": "XETRA",
+        "ticker": "SXR8"
+    },
+    "SXRV.DE": {
+        "name": "iShares NASDAQ 100 UCITS ETF",
+        "isin": "IE00B53SZB19",
+        "market": "XETRA",
+        "ticker": "SXRV"
+    },
+    "ZPDF.DE": {
+        "name": "SPDR S&P U.S. Financials Select Sector UCITS ETF",
+        "isin": "IE00BWBXM500",
+        "market": "XETRA",
+        "ticker": "ZPDF"
+    }
+}
+
 MIN_SCORE = 80
+MAX_SUPPORT_DISTANCE = 0.03
+MAX_RSI = 45
+
 PERIOD = "1y"
 INTERVAL = "1d"
 NEWS_HOURS = 24
@@ -45,7 +82,6 @@ COMPANY_NAMES = {
     "PANW": "Palo Alto Networks", "ADBE": "Adobe"
 }
 
-
 SPECIAL_TOPICS = {
     "XOM": ["oil","crude","brent","wti","opec","iran","hormuz",
             "strait of hormuz","middle east","sanctions","production",
@@ -62,6 +98,24 @@ SPECIAL_TOPICS = {
     "TSLA": ["electric vehicles","ev","china","tariffs",
              "autonomous driving","robotaxi","regulation"]
 }
+
+
+def is_etf(ticker):
+    return ticker in ETF_INFO
+
+
+def display_ticker(ticker):
+    return ETF_INFO[ticker]["ticker"] if is_etf(ticker) else ticker
+
+
+def display_name(ticker):
+    if is_etf(ticker):
+        return ETF_INFO[ticker]["name"]
+    return COMPANY_NAMES.get(ticker, ticker)
+
+
+def price_symbol(ticker):
+    return "€" if is_etf(ticker) else "$"
 
 
 def rsi(series, period=14):
@@ -121,7 +175,6 @@ def analyze(ticker):
     last = df.iloc[-1]
 
     price = float(last["Close"])
-    sma20 = float(last["SMA20"])
     sma50 = float(last["SMA50"])
     sma200 = float(last["SMA200"])
     rsi14 = float(last["RSI"])
@@ -191,10 +244,8 @@ def analyze(ticker):
         "stop": stop,
         "target1": target1,
         "target2": target2,
-        "sma20": sma20,
-        "sma50": sma50,
-        "sma200": sma200,
-        "reasons": reasons
+        "reasons": reasons,
+        "distance_support": distance_support
     }
 
 
@@ -239,9 +290,7 @@ def google_news(query):
             except Exception:
                 dt = now
 
-            age = now - dt
-
-            if age > timedelta(hours=NEWS_HOURS):
+            if now - dt > timedelta(hours=NEWS_HOURS):
                 continue
 
             news.append({
@@ -283,36 +332,38 @@ def unique_news(news):
 
 def analyze_news(ticker):
 
-    company = COMPANY_NAMES.get(ticker, ticker)
+    company = display_name(ticker)
 
-    queries = [
-        f'"{company}" {ticker}',
-        f'"{company}" stock',
-        f'"{company}" news',
-        f'"{ticker}" market risk'
-    ]
+    if is_etf(ticker):
+        queries = [
+            f'"{company}"',
+            f'"{display_ticker(ticker)}" ETF',
+            f'"{company}" news',
+            '"US markets" interest rates Fed inflation'
+        ]
+    else:
+        queries = [
+            f'"{company}" {ticker}',
+            f'"{company}" stock',
+            f'"{company}" news',
+            f'"{ticker}" market risk'
+        ]
 
-    topics = SPECIAL_TOPICS.get(ticker, [])
-
-    for topic in topics[:6]:
-        queries.append(f'"{company}" {topic}')
+        for topic in SPECIAL_TOPICS.get(ticker, [])[:6]:
+            queries.append(f'"{company}" {topic}')
 
     if ticker == "XOM":
         queries.extend([
             "oil price OPEC Iran Hormuz",
             "Brent crude Middle East Iran",
-            "Strait of Hormuz oil",
-            "United Nations Hormuz oil",
-            "OPEC oil production"
+            "Strait of Hormuz oil"
         ])
-
     elif ticker in ["NVDA", "AMD", "MU", "INTC", "AMAT", "AVGO", "QCOM"]:
         queries.extend([
             "semiconductor China export restrictions",
             "AI chips export restrictions",
             "semiconductor tariffs China"
         ])
-
     else:
         queries.extend([
             "US stock market interest rates Fed inflation",
@@ -368,7 +419,7 @@ def analyze_news(ticker):
     risk_keywords = [
         "war","conflict","iran","hormuz","sanctions","tariff",
         "tariffs","investigation","lawsuit","regulation","ban",
-        "recession","interest rates"
+        "recession","interest rates","inflation"
     ]
 
     risk_hits = []
@@ -394,14 +445,10 @@ def analyze_news(ticker):
     summary = []
 
     if positive > 0:
-        summary.append(
-            f"{positive} indicador(es) positivo(s)"
-        )
+        summary.append(f"{positive} indicador(es) positivo(s)")
 
     if negative > 0:
-        summary.append(
-            f"{negative} indicador(es) negativo(s)"
-        )
+        summary.append(f"{negative} indicador(es) negativo(s)")
 
     if risk_hits:
         summary.append(
@@ -448,41 +495,51 @@ def format_news(news_data):
     return "\n".join(lines)
 
 
+def format_price(value, ticker):
+
+    symbol = "€" if is_etf(ticker) else "$"
+    return f"{symbol}{value:.2f}"
+
+
 def format_alert(x):
 
     news_data = x["news_data"]
     news_text = format_news(news_data)
 
-    negative = news_data.get("negative", 0)
-    risk = news_data.get("risk", "")
+    extra = ""
 
-    if risk == "NEGATIVO" and negative >= 2:
-        final_signal = "⚠️ SEÑAL FINAL: PRECAUCIÓN — esperar"
-    else:
-        final_signal = "🟢 SEÑAL FINAL: POSIBLE ENTRADA"
+    if is_etf(x["ticker"]):
+        info = ETF_INFO[x["ticker"]]
+        extra = (
+            f"📦 UCITS / {info['market']}\n"
+            f"🔎 ISIN: {info['isin']}\n"
+        )
 
     return (
-        f"💎 POSIBLE CHOLLO — {x['ticker']}\n\n"
-
-        f"💰 Precio actual: ${x['price']:.2f}\n"
+        f"💎 POSIBLE CHOLLO — {display_ticker(x['ticker'])}\n\n"
+        f"{extra}"
+        f"💰 Precio actual: {format_price(x['price'], x['ticker'])}\n"
         f"📊 Puntuación técnica: {x['score']}/100\n"
         f"📉 RSI: {x['rsi']:.1f}\n"
-        f"📍 Soporte: ${x['support']:.2f}\n\n"
+        f"📍 Soporte: {format_price(x['support'], x['ticker'])}\n\n"
 
-        f"🟢 ENTRADA ORIENTATIVA: ${x['price']:.2f}\n"
-        f"🛑 STOP: ${x['stop']:.2f}\n"
-        f"🎯 OBJETIVO 1: ${x['target1']:.2f}\n"
-        f"🎯 OBJETIVO 2: ${x['target2']:.2f}\n\n"
+        f"🟢 ENTRADA ORIENTATIVA: "
+        f"{format_price(x['price'], x['ticker'])}\n"
+        f"🛑 STOP: {format_price(x['stop'], x['ticker'])}\n"
+        f"🎯 OBJETIVO 1: {format_price(x['target1'], x['ticker'])}\n"
+        f"🎯 OBJETIVO 2: {format_price(x['target2'], x['ticker'])}\n\n"
 
         f"📈 Motivos técnicos:\n"
         f"{', '.join(x['reasons'])}\n\n"
 
         f"{news_text}\n\n"
 
-        f"{final_signal}\n\n"
+        "🟢 SEÑAL FINAL: POSIBLE ENTRADA\n\n"
 
-        "⚠️ La señal combina análisis técnico y noticias. "
-        "Los niveles son orientativos y pueden cambiar."
+        "⚠️ Solo se genera esta alerta si cumple TODOS los "
+        "filtros de CHOLLO: score >=80, RSI <=45, "
+        "precio <=3% del soporte y noticias "
+        "POSITIVAS o MIXTAS/NEUTRAS."
     )
 
 
@@ -519,11 +576,17 @@ def main():
     results = []
 
     print("========================================")
-    print("   ESCÁNER DE OPORTUNIDADES DE BOLSA")
+    print("   ESCÁNER DE CHOLLOS PARA DEGIRO")
     print("========================================")
     print()
 
-    print("Analizando acciones...")
+    print(
+        f"Filtro CHOLLO: score >= {MIN_SCORE}, "
+        f"RSI <= {MAX_RSI}, "
+        f"soporte <= {MAX_SUPPORT_DISTANCE:.0%}"
+    )
+    print("Noticias permitidas: POSITIVAS o MIXTAS/NEUTRAS")
+    print()
 
     for ticker in TICKERS:
 
@@ -536,14 +599,14 @@ def main():
                 results.append(result)
 
                 print(
-                    f"{ticker}: "
+                    f"{display_ticker(ticker)}: "
                     f"{result['score']}/100"
                 )
 
         except Exception as e:
 
             print(
-                f"{ticker}: error técnico ({e})"
+                f"{display_ticker(ticker)}: error técnico ({e})"
             )
 
     candidates = sorted(
@@ -569,41 +632,46 @@ def main():
 
         print()
         print(
-            f"Analizando noticias de {ticker}..."
+            f"Analizando noticias de "
+            f"{display_ticker(ticker)}..."
         )
 
         try:
 
             news_data = analyze_news(ticker)
-
             candidate["news_data"] = news_data
 
             print(
-                f"{ticker}: "
+                f"{display_ticker(ticker)}: "
                 f"{news_data['risk']}"
             )
 
-            # FILTRO DE CHOLLO
             distance_support = (
                 (candidate["price"] - candidate["support"])
                 / candidate["price"]
             )
 
+            # ====================================================
+            # FILTRO ESTRICTO DE CHOLLO
+            # ====================================================
             chollo = (
                 candidate["score"] >= MIN_SCORE
-                and distance_support <= 0.03
-                and candidate["rsi"] <= 45
-                and news_data.get("risk") != "NEGATIVO"
+                and distance_support <= MAX_SUPPORT_DISTANCE
+                and candidate["rsi"] <= MAX_RSI
+                and news_data.get("risk")
+                in ("POSITIVO", "MIXTO / NEUTRO")
             )
 
             if chollo:
+
                 candidate["chollo"] = True
                 signals.append(candidate)
 
         except Exception as e:
 
             print(
-                f"{ticker}: error analizando noticias ({e})"
+                f"{display_ticker(ticker)}: "
+                f"error analizando noticias ({e})"
             )
 
             candidate["news_data"] = {
@@ -611,15 +679,22 @@ def main():
                 "positive": 0,
                 "negative": 0,
                 "risk": "ERROR",
-                "summary": "No se pudo completar el análisis de noticias."
+                "summary": (
+                    "No se pudo completar el análisis de noticias."
+                )
             }
 
     if not signals:
 
         message = (
-            "📊 ESCÁNER USA\n\n"
-            "No hay oportunidades que cumplan "
-            f"el umbral de {MIN_SCORE}/100."
+            "📊 ESCÁNER DE CHOLLOS PARA DEGIRO\n\n"
+            "No hay oportunidades que cumplan TODOS "
+            "los filtros del CHOLLO.\n\n"
+            f"• Puntuación mínima: {MIN_SCORE}/100\n"
+            f"• RSI máximo: {MAX_RSI}\n"
+            f"• Distancia al soporte: <= {MAX_SUPPORT_DISTANCE:.0%}\n"
+            "• Noticias: POSITIVAS o MIXTAS/NEUTRAS\n"
+            "• ETF: UCITS europeos incluidos"
         )
 
         send_telegram(message)
