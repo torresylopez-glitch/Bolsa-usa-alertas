@@ -14,7 +14,26 @@ from datetime import datetime, timezone, timedelta
 # CONFIGURACIÓN
 # ============================================================
 
-TICKERS = [
+TICKERS = ["SPY",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "XLK",
+    "XLF",
+    "XLE",
+    "XLV",
+    "XLI",
+    "XLP",
+    "XLY",
+    "XLU",
+    "XLB",
+    "SMH",
+    "SOXX",
+    "GLD",
+    "SLV",
+    "TLT",
+    "HYG",
+    "EEM",
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","AVGO","TSLA",
     "AMD","NFLX","JPM","V","MA","COST","WMT","LLY","XOM","ORCL",
     "CRM","PLTR","QCOM","MU","INTC","AMAT","UBER","PANW","ADBE"
