@@ -14,29 +14,12 @@ from datetime import datetime, timezone, timedelta
 # CONFIGURACIÓN
 # ============================================================
 
-TICKERS = ["SPY",
-    "QQQ",
-    "IWM",
-    "DIA",
-    "XLK",
-    "XLF",
-    "XLE",
-    "XLV",
-    "XLI",
-    "XLP",
-    "XLY",
-    "XLU",
-    "XLB",
-    "SMH",
-    "SOXX",
-    "GLD",
-    "SLV",
-    "TLT",
-    "HYG",
-    "EEM",
+TICKERS = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","AVGO","TSLA",
     "AMD","NFLX","JPM","V","MA","COST","WMT","LLY","XOM","ORCL",
-    "CRM","PLTR","QCOM","MU","INTC","AMAT","UBER","PANW","ADBE"
+    "CRM","PLTR","QCOM","MU","INTC","AMAT","UBER","PANW","ADBE",
+    "SPY","QQQ","IWM","DIA","XLK","XLF","XLE","XLV","XLI","XLP",
+    "XLY","XLU","XLB","SMH","SOXX","GLD","SLV","TLT","HYG","EEM"
 ]
 
 MIN_SCORE = 80
@@ -479,7 +462,7 @@ def format_alert(x):
         final_signal = "🟢 SEÑAL FINAL: POSIBLE ENTRADA"
 
     return (
-        f"🔔 POSIBLE ENTRADA — {x['ticker']}\n\n"
+        f"💎 POSIBLE CHOLLO — {x['ticker']}\n\n"
 
         f"💰 Precio actual: ${x['price']:.2f}\n"
         f"📊 Puntuación técnica: {x['score']}/100\n"
@@ -589,7 +572,7 @@ def main():
             f"Analizando noticias de {ticker}..."
         )
 
-                try:
+        try:
 
             news_data = analyze_news(ticker)
 
@@ -607,7 +590,7 @@ def main():
             )
 
             chollo = (
-                candidate["score"] >= 80
+                candidate["score"] >= MIN_SCORE
                 and distance_support <= 0.03
                 and candidate["rsi"] <= 45
                 and news_data.get("risk") != "NEGATIVO"
