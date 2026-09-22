@@ -721,12 +721,30 @@ def format_news(news_data):
 # ============================================================
 # ALERTA TELEGRAM
 # ============================================================
-
-def format_alert(x):
+    def format_alert(x):
 
     news_data = x["news_data"]
 
     news_text = format_news(news_data)
+
+    # ========================================================
+    # SEÑAL FINAL
+    # ========================================================
+
+    negative = news_data.get("negative", 0)
+    risk = news_data.get("risk", "")
+
+    if risk == "NEGATIVO" and negative >= 2:
+
+        final_signal = (
+            "⚠️ SEÑAL FINAL: PRECAUCIÓN — esperar"
+        )
+
+    else:
+
+        final_signal = (
+            "🟢 SEÑAL FINAL: POSIBLE ENTRADA"
+        )
 
     return (
         f"🔔 POSIBLE ENTRADA — {x['ticker']}\n\n"
@@ -745,6 +763,8 @@ def format_alert(x):
         f"{', '.join(x['reasons'])}\n\n"
 
         f"{news_text}\n\n"
+
+        f"{final_signal}\n\n"
 
         "⚠️ La señal combina análisis técnico y noticias. "
         "Los niveles son orientativos y pueden cambiar."
