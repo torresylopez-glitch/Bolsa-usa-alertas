@@ -589,7 +589,7 @@ def main():
             f"Analizando noticias de {ticker}..."
         )
 
-        try:
+                try:
 
             news_data = analyze_news(ticker)
 
@@ -601,20 +601,21 @@ def main():
             )
 
             # FILTRO DE CHOLLO
-distance_support = (
-    (candidate["price"] - candidate["support"]) / candidate["price"]
-)
+            distance_support = (
+                (candidate["price"] - candidate["support"])
+                / candidate["price"]
+            )
 
-chollo = (
-    candidate["score"] >= 80
-    and distance_support <= 0.03
-    and candidate["rsi"] <= 45
-    and news_data.get("risk") != "NEGATIVO"
-)
+            chollo = (
+                candidate["score"] >= 80
+                and distance_support <= 0.03
+                and candidate["rsi"] <= 45
+                and news_data.get("risk") != "NEGATIVO"
+            )
 
-if chollo:
-    candidate["chollo"] = True
-    signals.append(candidate)
+            if chollo:
+                candidate["chollo"] = True
+                signals.append(candidate)
 
         except Exception as e:
 
@@ -629,8 +630,6 @@ if chollo:
                 "risk": "ERROR",
                 "summary": "No se pudo completar el análisis de noticias."
             }
-
-            signals.append(candidate)
 
     if not signals:
 
