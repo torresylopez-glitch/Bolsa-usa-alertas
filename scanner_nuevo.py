@@ -1,5 +1,7 @@
 import os
 import math
+import time
+import re
 import requests
 import numpy as np
 import pandas as pd
@@ -11,27 +13,24 @@ from datetime import datetime, timezone, timedelta
 
 
 # ============================================================
-# ESCÁNER DE CHOLLOS PARA DEGIRO
-# VERSIÓN COMPLETA
+# 📊 ESCÁNER DE CHOLLOS PARA DEGIRO
+# VERSIÓN DEFINITIVA
 # ============================================================
 
 
 # ============================================================
-# UNIVERSO DE ACCIONES
+# 1. UNIVERSO
 # ============================================================
 
 STOCK_TICKERS = [
-
     # USA
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
-    "AVGO", "TSLA", "AMD", "NFLX", "JPM", "V", "MA",
-    "COST", "WMT", "LLY", "XOM", "ORCL", "CRM",
-    "PLTR", "QCOM", "MU", "INTC", "AMAT", "UBER",
-    "PANW", "ADBE",
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO",
+    "TSLA", "AMD", "NFLX", "JPM", "V", "MA", "COST", "WMT",
+    "LLY", "XOM", "ORCL", "CRM", "PLTR", "QCOM", "MU", "INTC",
+    "AMAT", "UBER", "PANW", "ADBE",
 
     # ESPAÑA
-    "IBE.MC", "BBVA.MC", "SAN.MC", "ITX.MC",
-    "REP.MC", "TEF.MC",
+    "IBE.MC", "BBVA.MC", "SAN.MC", "ITX.MC", "REP.MC", "TEF.MC",
 
     # ALEMANIA
     "SAP.DE", "SIE.DE", "ALV.DE", "DTE.DE",
@@ -43,62 +42,49 @@ STOCK_TICKERS = [
     "ASML.AS", "ADYEN.AS",
 
     # ITALIA
-    "RACE.MI", "ENEL.MI", "ISP.MI"
+    "RACE.MI", "ENEL.MI", "ISP.MI",
 ]
-
-
-# ============================================================
-# ETF UCITS EUROPEOS
-# ============================================================
 
 ETF_TICKERS = [
     "SXR8.DE",
     "SXRV.DE",
-    "ZPDF.DE"
+    "ZPDF.DE",
 ]
 
 TICKERS = STOCK_TICKERS + ETF_TICKERS
 
 
 ETF_INFO = {
-
     "SXR8.DE": {
         "name": "iShares Core S&P 500 UCITS ETF",
         "isin": "IE00B5BMR087",
-        "ticker": "SXR8"
+        "ticker": "SXR8",
     },
-
     "SXRV.DE": {
         "name": "iShares NASDAQ 100 UCITS ETF",
         "isin": "IE00B53SZB19",
-        "ticker": "SXRV"
+        "ticker": "SXRV",
     },
-
     "ZPDF.DE": {
         "name": "SPDR S&P U.S. Financials Select Sector UCITS ETF",
         "isin": "IE00BWBXM500",
-        "ticker": "ZPDF"
-    }
+        "ticker": "ZPDF",
+    },
 }
 
 
-# ============================================================
-# NOMBRES
-# ============================================================
-
 COMPANY_NAMES = {
-
     "AAPL": "Apple",
     "MSFT": "Microsoft",
     "NVDA": "NVIDIA",
     "AMZN": "Amazon",
-    "GOOGL": "Alphabet",
+    "GOOGL": "Alphabet Google",
     "META": "Meta Platforms",
     "AVGO": "Broadcom",
     "TSLA": "Tesla",
     "AMD": "AMD",
     "NFLX": "Netflix",
-    "JPM": "JPMorgan",
+    "JPM": "JPMorgan Chase",
     "V": "Visa",
     "MA": "Mastercard",
     "COST": "Costco",
@@ -109,7 +95,7 @@ COMPANY_NAMES = {
     "CRM": "Salesforce",
     "PLTR": "Palantir",
     "QCOM": "Qualcomm",
-    "MU": "Micron",
+    "MU": "Micron Technology",
     "INTC": "Intel",
     "AMAT": "Applied Materials",
     "UBER": "Uber",
@@ -138,213 +124,204 @@ COMPANY_NAMES = {
 
     "RACE.MI": "Ferrari",
     "ENEL.MI": "Enel",
-    "ISP.MI": "Intesa Sanpaolo"
+    "ISP.MI": "Intesa Sanpaolo",
 }
 
 
 # ============================================================
-# CONFIGURACIÓN
+# 2. CONFIGURACIÓN
 # ============================================================
 
+# Filtro principal
 MIN_SCORE = 75
-
+MAX_RSI = 45
 MAX_SUPPORT_DISTANCE = 0.03
 
-MAX_RSI = 45
-
+# Confirmación técnica
 MAX_REBOUND_DISTANCE = 0.015
-
 MIN_VOLUME_CONFIRMATION = 1.15
 
-PERIOD = "1y"
-
-INTERVAL = "1d"
-
-NEWS_HOURS = 24
-
-MAX_NEWS = 8
-
-MARKET_TICKER = "^GSPC"
-
-MARKET_PERIOD = "1y"
-
-EARNINGS_BLACKOUT_DAYS = 3
-
-
-# ============================================================
-# FILTROS ADICIONALES
-# ============================================================
-
+# Liquidez
 MIN_AVG_DOLLAR_VOLUME = 5_000_000
 
+# Evitar entradas después de movimientos demasiado violentos
 MAX_DAILY_MOVE = 0.08
 
-SUPPORT_LOOKBACK = 20
+# Datos
+PERIOD = "1y"
+INTERVAL = "1d"
+
+# Noticias
+NEWS_HOURS = 24
+MAX_NEWS = 8
+
+# Mercado
+MARKET_TICKER = "^GSPC"
+MARKET_PERIOD = "1y"
+
+# Resultados
+EARNINGS_BLACKOUT_DAYS = 3
+
+# Capital
+CAPITAL_EUR = float(os.getenv("CAPITAL_EUR", "5000"))
+RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
+
+# Telegram
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# IMPORTANTE:
+# Solo se envían a Telegram señales CONFIRMADAS.
+SEND_WATCHLIST_ALERTS = False
+
+# Solo enviar alerta si hay al menos esta cantidad de filtros
+# técnicos/mercado y noticias completamente válidos.
+REQUIRE_ALL_FILTERS = True
 
 
 # ============================================================
-# GESTIÓN MONETARIA
-# ============================================================
-
-CAPITAL_EUR = float(
-    os.getenv(
-        "CAPITAL_EUR",
-        "5000"
-    )
-)
-
-RISK_PER_TRADE = float(
-    os.getenv(
-        "RISK_PER_TRADE",
-        "0.01"
-    )
-)
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
-
-TELEGRAM_BOT_TOKEN = os.getenv(
-    "TELEGRAM_BOT_TOKEN",
-    ""
-)
-
-TELEGRAM_CHAT_ID = os.getenv(
-    "TELEGRAM_CHAT_ID",
-    ""
-)
-
-
-# ============================================================
-# PALABRAS POSITIVAS
+# 3. PALABRAS DE NOTICIAS
 # ============================================================
 
 POSITIVE_WORDS = [
-
+    "beat",
     "beats",
-    "beat estimates",
-    "beat expectations",
-    "strong results",
-    "strong growth",
+    "beating",
+    "surpasses",
+    "surprise",
+    "upgrade",
+    "upgraded",
+    "raises guidance",
+    "raised guidance",
+    "strong guidance",
     "record revenue",
     "record profit",
     "profit rises",
     "revenue rises",
-    "raises guidance",
-    "raised guidance",
-    "upgrade",
-    "upgraded",
-    "buy rating",
-    "strong demand",
-    "new contract",
-    "major contract",
-    "partnership",
+    "growth",
+    "grows",
     "approval",
     "approved",
-    "positive outlook",
-    "bullish",
-    "surges",
-    "jumps",
-    "growth",
-    "expands",
-    "expansion",
-    "acquisition",
     "deal",
+    "contract",
+    "partnership",
+    "buyback",
+    "dividend increase",
+    "acquisition",
+    "acquires",
+    "positive",
+    "outlook raised",
+    "guidance raised",
+    "expands",
+    "orders increase",
     "orders rise",
-    "sales rise",
+    "new contract",
+    "new orders",
 
     "supera",
-    "supera las expectativas",
-    "mejores resultados",
-    "crecimiento",
-    "récord",
+    "supera las previsiones",
+    "mejora",
+    "mejora previsiones",
+    "eleva previsiones",
     "beneficio aumenta",
     "ingresos aumentan",
-    "eleva previsiones",
-    "recomendación de compra",
+    "crecimiento",
+    "aprobado",
+    "aprobación",
     "contrato",
     "acuerdo",
-    "aprobación",
-    "perspectivas positivas",
-    "sube",
-    "aumenta",
-    "crece"
+    "alianza",
+    "recompra",
+    "dividendo aumenta",
+    "adquisición",
+    "positivo",
 ]
 
-
-# ============================================================
-# PALABRAS NEGATIVAS
-# ============================================================
 
 NEGATIVE_WORDS = [
-
+    "miss",
     "misses",
-    "missed estimates",
-    "missed expectations",
-    "weak results",
-    "weak demand",
+    "missed",
+    "warning",
+    "profit warning",
     "cuts guidance",
     "cut guidance",
+    "lowers guidance",
+    "lower guidance",
     "downgrade",
     "downgraded",
-    "sell rating",
-    "warning",
-    "profit falls",
-    "revenue falls",
-    "decline",
-    "declines",
     "lawsuit",
     "investigation",
+    "investigated",
     "fraud",
-    "recall",
-    "layoffs",
-    "job cuts",
-    "bankruptcy",
-    "debt concerns",
-    "regulatory concerns",
-    "export restrictions",
-    "tariffs",
+    "ban",
+    "banned",
     "sanctions",
-    "crisis",
-    "bearish",
-    "plunges",
+    "tariff",
+    "tariffs",
+    "layoffs",
+    "layoff",
+    "recall",
+    "recalls",
+    "failure",
+    "fails",
+    "failed",
+    "weak demand",
+    "demand falls",
+    "sales fall",
+    "revenue falls",
+    "profit falls",
+    "loss",
+    "losses",
+    "decline",
     "falls",
-
-    "no cumple",
-    "decepciona",
-    "resultados débiles",
-    "demanda débil",
-    "recorta previsiones",
-    "rebaja",
-    "venta",
-    "advertencia",
-    "beneficio cae",
-    "ingresos caen",
-    "caída",
-    "demanda cae",
-    "demanda baja",
-    "demanda débil",
-    "investigación",
-    "fraude",
-    "despidos",
-    "quiebra",
-    "deuda",
-    "aranceles",
-    "sanciones",
+    "falling",
+    "drops",
+    "drop",
+    "plunges",
+    "plunge",
+    "cuts",
+    "cut",
+    "recession",
     "crisis",
-    "bajista",
-    "se desploma",
-    "cae"
+    "default",
+    "bankruptcy",
+    "delay",
+    "delays",
+    "rejected",
+    "rejection",
+    "negative",
+    "adverse",
+    "disappointing",
+    "disappoints",
+
+    "incumple",
+    "rebaja previsiones",
+    "recorta previsiones",
+    "investigación",
+    "investigado",
+    "demanda",
+    "sanciones",
+    "aranceles",
+    "despidos",
+    "retirada",
+    "fallo",
+    "fracaso",
+    "caída",
+    "cae",
+    "baja",
+    "pérdidas",
+    "recesión",
+    "crisis",
+    "retraso",
+    "rechazado",
+    "negativo",
+    "adverso",
+    "decepcionante",
 ]
 
 
-# ============================================================
-# PALABRAS DE RIESGO
-# ============================================================
-
-RISK_WORDS = [
-
+GENERAL_RISK_TERMS = [
     "war",
     "conflict",
     "iran",
@@ -354,6 +331,8 @@ RISK_WORDS = [
     "china",
     "taiwan",
     "sanctions",
+    "sanction",
+    "tariff",
     "tariffs",
     "fed",
     "interest rates",
@@ -364,703 +343,573 @@ RISK_WORDS = [
     "opec",
     "hormuz",
     "middle east",
+    "un",
     "antitrust",
     "regulation",
     "regulatory",
-    "ban",
     "export restrictions",
-    "investigation",
-    "lawsuit",
+    "export controls",
 
     "guerra",
     "conflicto",
+    "iran",
+    "israel",
+    "rusia",
+    "ucrania",
+    "china",
+    "taiwan",
     "sanciones",
     "aranceles",
+    "tipos de interés",
     "inflación",
     "recesión",
     "petróleo",
     "crudo",
-    "estrecho de ormuz",
+    "estrecho de hormuz",
+    "oriente medio",
     "regulación",
-    "prohibición",
-    "investigación",
-    "demanda"
 ]
 
 
-# ============================================================
-# TEMAS ESPECÍFICOS
-# ============================================================
-
 SPECIAL_TOPICS = {
-
     "XOM": [
-        "oil",
-        "crude",
-        "brent",
-        "wti",
-        "opec",
-        "iran",
-        "hormuz",
-        "middle east",
-        "energy"
-    ],
-
-    "LLY": [
-        "weight loss",
-        "obesity",
-        "diabetes",
-        "drug approval",
-        "fda",
-        "clinical trial"
-    ],
-
-    "NVDA": [
-        "ai",
-        "artificial intelligence",
-        "chips",
-        "semiconductor",
-        "china",
-        "export restrictions",
-        "data center"
-    ],
-
-    "AMD": [
-        "ai",
-        "artificial intelligence",
-        "chips",
-        "semiconductor",
-        "china",
-        "export restrictions"
-    ],
-
-    "MU": [
-        "memory",
-        "dram",
-        "nand",
-        "semiconductor",
-        "chips",
-        "ai"
-    ],
-
-    "TSLA": [
-        "electric vehicles",
-        "ev",
-        "china",
-        "tariffs",
-        "autonomous driving",
-        "robotaxi"
-    ],
-
-    "ASML.AS": [
-        "semiconductor",
-        "chips",
-        "lithography",
-        "china",
-        "export restrictions"
-    ],
-
-    "AIR.PA": [
-        "airbus",
-        "aircraft",
-        "aviation",
-        "defense",
-        "orders",
-        "supply chain"
+        "oil", "crude", "brent", "wti", "opec", "iran",
+        "hormuz", "middle east", "energy", "sanctions",
+        "production", "refinery",
     ],
 
     "REP.MC": [
-        "oil",
-        "crude",
-        "brent",
-        "wti",
-        "opec",
-        "energy"
-    ]
+        "oil", "crude", "brent", "wti", "opec",
+        "iran", "hormuz", "energy",
+    ],
+
+    "LLY": [
+        "weight loss", "obesity", "diabetes", "fda",
+        "drug approval", "clinical trial", "clinical trials",
+    ],
+
+    "NVDA": [
+        "ai", "chips", "semiconductor", "china",
+        "export restrictions", "export controls", "data center",
+    ],
+
+    "AMD": [
+        "ai", "chips", "semiconductor", "china",
+        "export restrictions", "export controls",
+    ],
+
+    "MU": [
+        "memory", "dram", "nand", "semiconductor",
+        "chips", "ai", "china",
+    ],
+
+    "INTC": [
+        "semiconductor", "chips", "china",
+        "foundry", "export restrictions",
+    ],
+
+    "AMAT": [
+        "semiconductor", "chips", "china",
+        "export restrictions", "equipment",
+    ],
+
+    "AVGO": [
+        "ai", "chips", "semiconductor", "data center",
+    ],
+
+    "QCOM": [
+        "chips", "semiconductor", "china",
+        "smartphone", "export restrictions",
+    ],
+
+    "TSLA": [
+        "ev", "electric vehicle", "china", "tariffs",
+        "autonomous", "robotaxi", "regulation", "recall",
+    ],
+
+    "ASML.AS": [
+        "semiconductor", "chips", "lithography",
+        "china", "export restrictions", "export controls",
+    ],
+
+    "AIR.PA": [
+        "airbus", "aircraft", "aviation", "defense",
+        "orders", "supply chain",
+    ],
 }
 
 
 # ============================================================
-# UTILIDADES
+# 4. UTILIDADES
 # ============================================================
 
 def is_etf(ticker):
+    return ticker in ETF_TICKERS
 
-    return ticker in ETF_INFO
+
+def is_eur_asset(ticker):
+    """
+    Estos instrumentos cotizan en EUR.
+    """
+    if is_etf(ticker):
+        return True
+
+    return ticker.endswith((
+        ".MC",
+        ".DE",
+        ".PA",
+        ".AS",
+        ".MI",
+    ))
+
+
+def currency_for(ticker):
+    return "EUR" if is_eur_asset(ticker) else "USD"
+
+
+def currency_symbol(ticker):
+    return "€" if currency_for(ticker) == "EUR" else "$"
 
 
 def display_ticker(ticker):
-
     if is_etf(ticker):
-
         return ETF_INFO[ticker]["ticker"]
 
-    return ticker
+    return ticker.replace(".MC", "").replace(
+        ".DE", ""
+    ).replace(
+        ".PA", ""
+    ).replace(
+        ".AS", ""
+    ).replace(
+        ".MI", ""
+    )
 
 
 def display_name(ticker):
-
     if is_etf(ticker):
-
         return ETF_INFO[ticker]["name"]
 
-    return COMPANY_NAMES.get(
-        ticker,
-        ticker
-    )
+    return COMPANY_NAMES.get(ticker, ticker)
 
 
-def safe_float(value):
-
+def safe_float(value, default=None):
     try:
+        if value is None:
+            return default
 
-        return float(value)
+        if isinstance(value, (pd.Series, pd.DataFrame)):
+            value = value.iloc[-1]
+
+        value = float(value)
+
+        if not np.isfinite(value):
+            return default
+
+        return value
 
     except Exception:
+        return default
 
-        return np.nan
+
+def fmt_number(value, decimals=2):
+    value = safe_float(value)
+
+    if value is None:
+        return "N/D"
+
+    text = f"{value:,.{decimals}f}"
+
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def fmt_price(ticker, value):
+    symbol = currency_symbol(ticker)
+
+    return f"{symbol}{fmt_number(value)}"
+
+
+def fmt_eur(value):
+    return f"{fmt_number(value)} €"
+
+
+def normalize_text(text):
+    if not text:
+        return ""
+
+    text = str(text).lower()
+
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
 # ============================================================
-# RSI
+# 5. RSI
 # ============================================================
 
-def calculate_rsi(
-    series,
-    period=14
-):
+def calculate_rsi(series, period=14):
 
     delta = series.diff()
 
-    gain = delta.clip(
-        lower=0
-    )
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-    loss = -delta.clip(
-        upper=0
-    )
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
 
-    avg_gain = gain.ewm(
-        alpha=1 / period,
-        adjust=False,
-        min_periods=period
-    ).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
 
-    avg_loss = loss.ewm(
-        alpha=1 / period,
-        adjust=False,
-        min_periods=period
-    ).mean()
+    rsi = 100 - (100 / (1 + rs))
 
-    rs = (
-        avg_gain
-        /
-        avg_loss.replace(
-            0,
-            np.nan
-        )
-    )
-
-    return (
-        100
-        -
-        (
-            100
-            /
-            (1 + rs)
-        )
-    )
+    return rsi
 
 
 # ============================================================
-# DATOS
+# 6. DESCARGA DE DATOS
 # ============================================================
 
-def download_data(
-    ticker,
-    period=PERIOD,
-    interval=INTERVAL
-):
+def download_data(ticker, period=PERIOD, interval=INTERVAL):
 
-    try:
+    for attempt in range(3):
 
-        df = yf.download(
-            ticker,
-            period=period,
-            interval=interval,
-            auto_adjust=True,
-            progress=False,
-            threads=False
-        )
+        try:
 
-        if df.empty:
+            df = yf.download(
+                ticker,
+                period=period,
+                interval=interval,
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
 
-            return None
+            if df is None or df.empty:
+                time.sleep(1)
+                continue
 
-        if isinstance(
-            df.columns,
-            pd.MultiIndex
-        ):
+            # Manejo de MultiIndex de yfinance
+            if isinstance(df.columns, pd.MultiIndex):
 
-            df.columns = [
-                c[0]
-                for c in df.columns
+                try:
+                    df.columns = df.columns.get_level_values(0)
+                except Exception:
+                    pass
+
+            required = [
+                "Open",
+                "High",
+                "Low",
+                "Close",
+                "Volume",
             ]
 
-        required = [
-            "Open",
-            "High",
-            "Low",
-            "Close",
-            "Volume"
-        ]
+            missing = [
+                col for col in required
+                if col not in df.columns
+            ]
 
-        if not all(
-            c in df.columns
-            for c in required
-        ):
+            if missing:
+                return None
 
-            return None
+            df = df[required].copy()
 
-        return df.dropna(
-            subset=required
-        )
+            for col in required:
+                df[col] = pd.to_numeric(
+                    df[col],
+                    errors="coerce",
+                )
 
-    except Exception as e:
+            df = df.dropna()
 
-        print(
-            f"Error descargando "
-            f"{ticker}: {e}"
-        )
+            if len(df) < 210:
+                return None
 
-        return None
+            return df
+
+        except Exception:
+
+            time.sleep(1)
+
+    return None
 
 
 # ============================================================
-# ANÁLISIS TÉCNICO
+# 7. ANÁLISIS TÉCNICO
 # ============================================================
 
 def analyze_ticker(ticker):
 
-    df = download_data(
-        ticker
-    )
-
-    if df is None:
-
-        return None
-
-    if len(df) < 210:
-
-        return None
-
-    close = df["Close"]
-
-    volume = df["Volume"]
-
-    df["SMA50"] = (
-        close.rolling(50)
-        .mean()
-    )
-
-    df["SMA200"] = (
-        close.rolling(200)
-        .mean()
-    )
-
-    df["RSI"] = calculate_rsi(
-        close
-    )
-
-    df["VOL20"] = (
-        volume.rolling(20)
-        .mean()
-    )
-
-    last = df.iloc[-1]
-
-    previous = df.iloc[-2]
-
-    price_value = safe_float(
-        last["Close"]
-    )
-
-    open_price = safe_float(
-        last["Open"]
-    )
-
-    high = safe_float(
-        last["High"]
-    )
-
-    low = safe_float(
-        last["Low"]
-    )
-
-    previous_close = safe_float(
-        previous["Close"]
-    )
-
-    previous_high = safe_float(
-        previous["High"]
-    )
-
-    sma50 = safe_float(
-        last["SMA50"]
-    )
-
-    sma200 = safe_float(
-        last["SMA200"]
-    )
-
-    rsi_value = safe_float(
-        last["RSI"]
-    )
-
-    volume_value = safe_float(
-        last["Volume"]
-    )
-
-    avg_volume = safe_float(
-        last["VOL20"]
-    )
-
-    if any(
-        pd.isna(x)
-        for x in [
-            price_value,
-            open_price,
-            high,
-            low,
-            previous_close,
-            previous_high,
-            sma50,
-            sma200,
-            rsi_value,
-            avg_volume
-        ]
-    ):
-
-        return None
-
-    volume_ratio = (
-        volume_value
-        /
-        avg_volume
-        if avg_volume > 0
-        else 0
-    )
-
-    avg_dollar_volume = (
-        avg_volume
-        *
-        price_value
-    )
-
-    daily_move = (
-        (
-            price_value
-            -
-            previous_close
-        )
-        /
-        previous_close
-        if previous_close > 0
-        else 0
-    )
-
-    # --------------------------------------------------------
-    # SOPORTE
-    #
-    # MUY IMPORTANTE:
-    # Se utilizan las 20 sesiones ANTERIORES.
-    # La vela actual no modifica el soporte.
-    # --------------------------------------------------------
-
-    previous_lows = (
-        df["Low"]
-        .iloc[
-            -(SUPPORT_LOOKBACK + 1):-1
-        ]
-    )
-
-    if len(previous_lows) < SUPPORT_LOOKBACK:
-
-        return None
-
-    support = safe_float(
-        previous_lows.min()
-    )
-
-    distance_support = (
-        (
-            price_value
-            -
-            support
-        )
-        /
-        price_value
-        if price_value > 0
-        else math.inf
-    )
-
-    # --------------------------------------------------------
-    # REBOTE
-    # --------------------------------------------------------
-
-    rebound_distance = (
-        (
-            low
-            -
-            support
-        )
-        /
-        support
-        if support > 0
-        else math.inf
-    )
-
-    bullish_candle = (
-        price_value
-        >
-        open_price
-    )
-
-    support_reaction = (
-        rebound_distance
-        <= MAX_REBOUND_DISTANCE
-    )
-
-    volume_confirmation = (
-        volume_ratio
-        >= MIN_VOLUME_CONFIRMATION
-    )
-
-    close_above_previous_high = (
-        price_value
-        >
-        previous_high
-    )
-
-    rebound_confirmed = (
-        bullish_candle
-        and support_reaction
-        and volume_confirmation
-        and close_above_previous_high
-    )
-
-    # --------------------------------------------------------
-    # SCORE
-    # --------------------------------------------------------
-
-    score = 0
-
-    reasons = []
-
-    if price_value > sma200:
-
-        score += 20
-
-        reasons.append(
-            "Precio > SMA200"
-        )
-
-    if sma50 > sma200:
-
-        score += 15
-
-        reasons.append(
-            "SMA50 > SMA200"
-        )
-
-    if price_value > sma50:
-
-        score += 10
-
-        reasons.append(
-            "Precio > SMA50"
-        )
-
-    if rsi_value < 30:
-
-        score += 25
-
-        reasons.append(
-            "RSI <30"
-        )
-
-    elif rsi_value <= 45:
-
-        score += 20
-
-        reasons.append(
-            "RSI 30-45"
-        )
-
-    elif rsi_value <= 55:
-
-        score += 8
-
-        reasons.append(
-            "RSI 45-55"
-        )
-
-    if volume_ratio >= 1.5:
-
-        score += 15
-
-        reasons.append(
-            "Volumen >=1.5x"
-        )
-
-    elif volume_ratio >= 1.15:
-
-        score += 8
-
-        reasons.append(
-            "Volumen >=1.15x"
-        )
-
-    if distance_support <= 0.03:
-
-        score += 20
-
-        reasons.append(
-            "Precio <=3% soporte"
-        )
-
-    elif distance_support <= 0.06:
-
-        score += 10
-
-        reasons.append(
-            "Precio <=6% soporte"
-        )
-
-    # --------------------------------------------------------
-    # STOP Y OBJETIVOS
-    # --------------------------------------------------------
-
-    stop = (
-        support
-        *
-        0.98
-    )
-
-    risk_per_share = (
-        price_value
-        -
-        stop
-    )
-
-    if risk_per_share > 0:
-
-        target1 = (
-            price_value
-            +
-            2
-            *
-            risk_per_share
-        )
-
-        target2 = (
-            price_value
-            +
-            3
-            *
-            risk_per_share
-        )
-
-        # R/R REAL DEL OBJETIVO 1.
-        reward_risk = (
-            target1
-            -
-            price_value
-        ) / risk_per_share
-
-    else:
-
-        target1 = np.nan
-
-        target2 = np.nan
-
-        reward_risk = 0
-
-    return {
-
-        "ticker":
-            ticker,
-
-        "price":
-            price_value,
-
-        "score":
-            score,
-
-        "rsi":
-            rsi_value,
-
-        "volume_ratio":
-            volume_ratio,
-
-        "avg_dollar_volume":
-            avg_dollar_volume,
-
-        "daily_move":
-            daily_move,
-
-        "support":
-            support,
-
-        "distance_support":
-            distance_support,
-
-        "rebound_distance":
-            rebound_distance,
-
-        "bullish_candle":
-            bullish_candle,
-
-        "support_reaction":
-            support_reaction,
-
-        "volume_confirmation":
-            volume_confirmation,
-
-        "close_above_previous_high":
-            close_above_previous_high,
-
-        "rebound_confirmed":
-            rebound_confirmed,
-
-        "stop":
-            stop,
-
-        "target1":
-            target1,
-
-        "target2":
-            target2,
-
-        "reward_risk":
-            reward_risk,
-
-        "reasons":
-            reasons,
-
-        "earnings":
-            None,
-
-        "news":
-            None,
-
-        "position":
-            None
+    result = {
+        "ticker": ticker,
+        "name": display_name(ticker),
+        "valid_data": False,
+        "error": None,
     }
+
+    df = download_data(ticker)
+
+    if df is None or len(df) < 210:
+
+        result["error"] = "Datos insuficientes"
+
+        return result
+
+    try:
+
+        df["SMA20"] = df["Close"].rolling(20).mean()
+        df["SMA50"] = df["Close"].rolling(50).mean()
+        df["SMA200"] = df["Close"].rolling(200).mean()
+        df["RSI"] = calculate_rsi(df["Close"], 14)
+        df["VOL20"] = df["Volume"].rolling(20).mean()
+
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        price = safe_float(last["Close"])
+        open_price = safe_float(last["Open"])
+        high = safe_float(last["High"])
+        low = safe_float(last["Low"])
+
+        previous_close = safe_float(prev["Close"])
+        previous_high = safe_float(prev["High"])
+
+        sma20 = safe_float(last["SMA20"])
+        sma50 = safe_float(last["SMA50"])
+        sma200 = safe_float(last["SMA200"])
+        rsi = safe_float(last["RSI"])
+
+        volume = safe_float(last["Volume"], 0)
+        avg_volume = safe_float(last["VOL20"], 0)
+
+        if any(
+            value is None
+            for value in [
+                price,
+                open_price,
+                high,
+                low,
+                previous_close,
+                previous_high,
+                sma50,
+                sma200,
+                rsi,
+            ]
+        ):
+            result["error"] = "Indicadores incompletos"
+            return result
+
+        if avg_volume is None or avg_volume <= 0:
+            result["error"] = "Volumen no disponible"
+            return result
+
+        volume_ratio = volume / avg_volume
+
+        avg_dollar_volume = (
+            avg_volume * price
+        )
+
+        daily_move = (
+            (price - previous_close)
+            / previous_close
+        )
+
+        support = safe_float(
+            df["Low"].tail(20).min()
+        )
+
+        if support is None or support <= 0:
+            result["error"] = "Soporte no disponible"
+            return result
+
+        distance_support = (
+            price - support
+        ) / price
+
+        rebound_distance = (
+            low - support
+        ) / support
+
+        bullish_candle = price > open_price
+
+        support_reaction = (
+            rebound_distance <= MAX_REBOUND_DISTANCE
+        )
+
+        volume_confirmation = (
+            volume_ratio >= MIN_VOLUME_CONFIRMATION
+        )
+
+        close_above_previous_high = (
+            price > previous_high
+        )
+
+        rebound_confirmed = (
+            bullish_candle
+            and support_reaction
+            and volume_confirmation
+            and close_above_previous_high
+        )
+
+        # ----------------------------------------------------
+        # SCORE
+        # ----------------------------------------------------
+
+        score = 0
+
+        if price > sma200:
+            score += 20
+
+        if sma50 > sma200:
+            score += 15
+
+        if price > sma50:
+            score += 10
+
+        if rsi < 30:
+            score += 25
+        elif rsi <= 45:
+            score += 20
+        elif rsi <= 55:
+            score += 8
+
+        if volume_ratio >= 1.5:
+            score += 15
+        elif volume_ratio >= 1.15:
+            score += 8
+
+        if distance_support <= 0.03:
+            score += 20
+        elif distance_support <= 0.06:
+            score += 10
+
+        # Nunca mostrar más de 100.
+        score = min(score, 100)
+
+        # ----------------------------------------------------
+        # STOP Y OBJETIVOS
+        # ----------------------------------------------------
+
+        stop = support * 0.98
+
+        risk_per_share = price - stop
+
+        if risk_per_share <= 0:
+            target1 = None
+            target2 = None
+            reward_risk = 0
+        else:
+            target1 = price + (
+                2 * risk_per_share
+            )
+
+            target2 = price + (
+                3 * risk_per_share
+            )
+
+            reward_risk = (
+                (target1 - price)
+                / risk_per_share
+            )
+
+        # ----------------------------------------------------
+        # FILTROS DE SEGURIDAD
+        # ----------------------------------------------------
+
+        liquidity_ok = (
+            avg_dollar_volume
+            >= MIN_AVG_DOLLAR_VOLUME
+        )
+
+        daily_move_ok = (
+            abs(daily_move)
+            <= MAX_DAILY_MOVE
+        )
+
+        support_ok = (
+            distance_support
+            <= MAX_SUPPORT_DISTANCE
+        )
+
+        result.update({
+
+            "valid_data": True,
+
+            "price": price,
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "previous_close": previous_close,
+            "previous_high": previous_high,
+
+            "sma20": sma20,
+            "sma50": sma50,
+            "sma200": sma200,
+
+            "rsi": rsi,
+
+            "volume": volume,
+            "avg_volume": avg_volume,
+            "volume_ratio": volume_ratio,
+            "avg_dollar_volume": avg_dollar_volume,
+
+            "daily_move": daily_move,
+
+            "support": support,
+            "distance_support": distance_support,
+            "rebound_distance": rebound_distance,
+
+            "bullish_candle": bullish_candle,
+            "support_reaction": support_reaction,
+            "volume_confirmation": volume_confirmation,
+            "close_above_previous_high":
+                close_above_previous_high,
+            "rebound_confirmed":
+                rebound_confirmed,
+
+            "score": score,
+
+            "stop": stop,
+            "risk_per_share": risk_per_share,
+            "target1": target1,
+            "target2": target2,
+            "reward_risk": reward_risk,
+
+            "liquidity_ok": liquidity_ok,
+            "daily_move_ok": daily_move_ok,
+            "support_ok": support_ok,
+
+            "currency": currency_for(ticker),
+
+            "news": [],
+            "news_count": 0,
+            "news_impact": "NO EVALUADO",
+            "news_risk_topics": [],
+
+            "earnings_blocked": False,
+            "earnings_status": "NO EVALUADO",
+
+            "eurusd": 1.0,
+
+            "shares": 0,
+            "capital_used_eur": 0,
+            "risk_eur": 0,
+            "max_risk_eur":
+                CAPITAL_EUR * RISK_PER_TRADE,
+
+        })
+
+        return result
+
+    except Exception as e:
+
+        result["error"] = str(e)
+
+        return result
 
 
 # ============================================================
-# MERCADO GENERAL
+# 8. MERCADO
 # ============================================================
 
 def get_market_regime():
@@ -1068,83 +917,51 @@ def get_market_regime():
     df = download_data(
         MARKET_TICKER,
         MARKET_PERIOD,
-        "1d"
+        "1d",
     )
 
-    if df is None:
+    if df is None or len(df) < 210:
 
         return {
-
-            "ok":
-                False,
-
-            "status":
-                "SIN DATOS"
+            "favorable": False,
+            "status": "NO DISPONIBLE",
+            "price": None,
         }
 
-    close = df["Close"]
+    df["SMA50"] = df["Close"].rolling(50).mean()
+    df["SMA200"] = df["Close"].rolling(200).mean()
 
-    if len(close) < 200:
+    price = safe_float(df["Close"].iloc[-1])
+    sma50 = safe_float(df["SMA50"].iloc[-1])
+    sma200 = safe_float(df["SMA200"].iloc[-1])
+
+    if None in [price, sma50, sma200]:
 
         return {
-
-            "ok":
-                False,
-
-            "status":
-                "SIN DATOS"
+            "favorable": False,
+            "status": "NO DISPONIBLE",
+            "price": price,
         }
 
-    sma50 = (
-        close.rolling(50)
-        .mean()
-        .iloc[-1]
-    )
-
-    sma200 = (
-        close.rolling(200)
-        .mean()
-        .iloc[-1]
-    )
-
-    market_price = close.iloc[-1]
-
-    ok = (
-        market_price > sma200
-        and
-        sma50 > sma200
+    favorable = (
+        price > sma200
+        and sma50 > sma200
     )
 
     return {
-
-        "ok":
-            bool(ok),
-
+        "favorable": favorable,
         "status":
             "FAVORABLE"
-            if ok
-            else
-            "DESFAVORABLE",
-
-        "price":
-            safe_float(
-                market_price
-            ),
-
-        "sma50":
-            safe_float(
-                sma50
-            ),
-
-        "sma200":
-            safe_float(
-                sma200
-            )
+            if favorable
+            else "DESFAVORABLE",
+        "price": price,
+        "sma50": sma50,
+        "sma200": sma200,
     }
 
 
 # ============================================================
-# RESULTADOS
+# 9. RESULTADOS
 # ============================================================
 
 def get_earnings_status(ticker):
@@ -1152,345 +969,297 @@ def get_earnings_status(ticker):
     if is_etf(ticker):
 
         return {
-
-            "blocked":
-                False,
-
-            "status":
-                "NO APLICA",
-
-            "date":
-                None,
-
-            "days":
-                None
+            "blocked": False,
+            "status": "ETF — no aplica",
+            "date": None,
+            "days": None,
         }
 
     try:
 
-        dates = (
-            yf.Ticker(ticker)
-            .get_earnings_dates(
-                limit=8
-            )
+        stock = yf.Ticker(ticker)
+
+        dates = stock.get_earnings_dates(
+            limit=8
         )
 
-        if (
-            dates is None
-            or
-            len(dates) == 0
-        ):
+        if dates is None or dates.empty:
 
             return {
-
-                "blocked":
-                    False,
-
-                "status":
-                    "SIN FECHA",
-
-                "date":
-                    None,
-
-                "days":
-                    None
+                "blocked": False,
+                "status": "No disponible",
+                "date": None,
+                "days": None,
             }
 
-        now = pd.Timestamp.now(
-            tz="UTC"
-        )
+        now = datetime.now(timezone.utc)
 
-        nearest = None
+        candidates = []
 
-        nearest_abs = None
+        for index in dates.index:
 
-        for date in dates.index:
+            try:
 
-            dt = pd.Timestamp(
-                date
+                if hasattr(index, "to_pydatetime"):
+                    dt = index.to_pydatetime()
+                else:
+                    dt = pd.Timestamp(index).to_pydatetime()
+
+                if dt.tzinfo is None:
+                    dt = dt.replace(
+                        tzinfo=timezone.utc
+                    )
+                else:
+                    dt = dt.astimezone(
+                        timezone.utc
+                    )
+
+                candidates.append(dt)
+
+            except Exception:
+                continue
+
+        if not candidates:
+
+            return {
+                "blocked": False,
+                "status": "No disponible",
+                "date": None,
+                "days": None,
+            }
+
+        future = [
+            dt for dt in candidates
+            if dt >= now - timedelta(days=1)
+        ]
+
+        if future:
+            nearest = min(
+                future,
+                key=lambda x: abs(
+                    (x - now).total_seconds()
+                ),
+            )
+        else:
+            nearest = min(
+                candidates,
+                key=lambda x: abs(
+                    (x - now).total_seconds()
+                ),
             )
 
-            if dt.tzinfo is None:
-
-                dt = dt.tz_localize(
-                    "UTC"
-                )
-
-            else:
-
-                dt = dt.tz_convert(
-                    "UTC"
-                )
-
-            diff = (
-                dt
-                -
-                now
-            ).total_seconds() / 86400
-
-            if (
-                nearest is None
-                or
-                abs(diff)
-                <
-                nearest_abs
-            ):
-
-                nearest = dt
-
-                nearest_abs = abs(
-                    diff
-                )
+        days = (
+            nearest.date()
+            - now.date()
+        ).days
 
         blocked = (
-            nearest_abs
+            abs(days)
             <= EARNINGS_BLACKOUT_DAYS
         )
 
+        if blocked:
+
+            status = (
+                f"RESULTADOS "
+                f"{days:+d} días"
+            )
+
+        else:
+
+            status = (
+                f"Sin resultados "
+                f"±{EARNINGS_BLACKOUT_DAYS} días"
+            )
+
         return {
-
-            "blocked":
-                blocked,
-
-            "status":
-                "BLOQUEADO POR RESULTADOS"
-                if blocked
-                else
-                "FUERA DEL BLOQUEO",
-
-            "date":
-                nearest,
-
-            "days":
-                nearest_abs
+            "blocked": blocked,
+            "status": status,
+            "date": nearest,
+            "days": days,
         }
 
     except Exception:
 
         return {
-
-            "blocked":
-                False,
-
-            "status":
-                "SIN DATOS",
-
-            "date":
-                None,
-
-            "days":
-                None
+            "blocked": False,
+            "status": "No disponible",
+            "date": None,
+            "days": None,
         }
 
 
 # ============================================================
-# EUR/USD
+# 10. EUR/USD
 # ============================================================
 
 def get_eurusd():
 
     try:
 
-        df = download_data(
+        df = yf.download(
             "EURUSD=X",
-            "5d",
-            "1d"
+            period="5d",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False,
         )
 
-        if df is None:
-
+        if df is None or df.empty:
             return 1.0
 
+        if isinstance(df.columns, pd.MultiIndex):
+
+            df.columns = df.columns.get_level_values(0)
+
         value = safe_float(
-            df["Close"].iloc[-1]
+            df["Close"].dropna().iloc[-1]
         )
 
-        if value > 0:
+        if value and value > 0:
 
             return value
 
     except Exception:
-
         pass
 
     return 1.0
 
 
 # ============================================================
-# POSICIÓN
+# 11. POSICIÓN
 # ============================================================
 
 def calculate_position(
     ticker,
     entry,
     stop,
-    eurusd
+    eurusd,
 ):
 
     max_risk_eur = (
         CAPITAL_EUR
-        *
-        RISK_PER_TRADE
+        * RISK_PER_TRADE
     )
 
-    risk_per_share = (
-        entry
-        -
-        stop
-    )
+    if entry is None or stop is None:
+        return {
+            "shares": 0,
+            "capital_used_eur": 0,
+            "risk_eur": 0,
+            "max_risk_eur": max_risk_eur,
+        }
+
+    risk_per_share = entry - stop
 
     if risk_per_share <= 0:
 
         return {
-
-            "shares":
-                0,
-
-            "capital_used_eur":
-                0,
-
-            "risk_eur":
-                0,
-
-            "max_risk_eur":
-                max_risk_eur
+            "shares": 0,
+            "capital_used_eur": 0,
+            "risk_eur": 0,
+            "max_risk_eur": max_risk_eur,
         }
 
-    if is_etf(ticker):
+    # --------------------------------------------------------
+    # EUROPA / ETF
+    # --------------------------------------------------------
+
+    if is_eur_asset(ticker):
 
         entry_eur = entry
+        risk_share_eur = risk_per_share
 
-        risk_eur_share = (
-            risk_per_share
-        )
+    # --------------------------------------------------------
+    # USA
+    # --------------------------------------------------------
 
     else:
 
-        entry_eur = (
-            entry
-            /
-            eurusd
-        )
+        if eurusd <= 0:
+            eurusd = 1.0
 
-        risk_eur_share = (
-            risk_per_share
-            /
-            eurusd
+        entry_eur = entry / eurusd
+        risk_share_eur = (
+            risk_per_share / eurusd
         )
 
     shares_risk = math.floor(
         max_risk_eur
-        /
-        risk_eur_share
+        / risk_share_eur
     )
 
     shares_capital = math.floor(
         CAPITAL_EUR
-        /
-        entry_eur
+        / entry_eur
     )
 
-    shares = max(
-        0,
-        min(
-            shares_risk,
-            shares_capital
-        )
+    shares = min(
+        shares_risk,
+        shares_capital,
     )
 
-    capital_used = (
-        shares
-        *
-        entry_eur
+    capital_used_eur = (
+        shares * entry_eur
     )
 
-    risk_total = (
-        shares
-        *
-        risk_eur_share
+    risk_eur = (
+        shares * risk_share_eur
     )
 
     return {
-
-        "shares":
-            shares,
-
+        "shares": shares,
         "capital_used_eur":
-            capital_used,
-
+            capital_used_eur,
         "risk_eur":
-            risk_total,
-
+            risk_eur,
         "max_risk_eur":
-            max_risk_eur
+            max_risk_eur,
     }
 
 
 # ============================================================
-# NOTICIAS
+# 12. NOTICIAS
 # ============================================================
 
-def get_news(
-    ticker,
-    language="es"
-):
+def get_news(ticker):
 
-    name = display_name(
-        ticker
-    )
+    name = display_name(ticker)
 
     topics = SPECIAL_TOPICS.get(
         ticker,
         []
     )
 
-    if topics:
+    query_parts = [
+        f'"{name}"',
+        ticker,
+    ]
 
-        query = (
-            f'"{name}" '
-            +
-            " ".join(
-                topics[:4]
-            )
-        )
+    query_parts.extend(
+        topics[:5]
+    )
 
-    else:
-
-        query = name
-
-    if language == "en":
-
-        hl = "en-US"
-
-        gl = "US"
-
-        ceid = "US:en"
-
-    else:
-
-        hl = "es-ES"
-
-        gl = "ES"
-
-        ceid = "ES:es"
+    query = " ".join(query_parts)
 
     url = (
         "https://news.google.com/rss/search?"
         f"q={quote(query)}"
-        f"&hl={hl}"
-        f"&gl={gl}"
-        f"&ceid={ceid}"
+        "&hl=en-US"
+        "&gl=US"
+        "&ceid=US:en"
     )
 
     try:
 
         response = requests.get(
             url,
-            timeout=20,
+            timeout=15,
             headers={
                 "User-Agent":
                     "Mozilla/5.0"
-            }
+            },
         )
 
         response.raise_for_status()
@@ -1499,1558 +1268,1491 @@ def get_news(
             response.content
         )
 
-        results = []
-
-        now = datetime.now(
-            timezone.utc
-        )
-
-        for item in root.findall(
-            ".//item"
-        ):
-
-            title = (
-                item.findtext(
-                    "title",
-                    ""
-                )
-                .strip()
-            )
-
-            link = (
-                item.findtext(
-                    "link",
-                    ""
-                )
-                .strip()
-            )
-
-            source = (
-                item.findtext(
-                    "source",
-                    ""
-                )
-                .strip()
-            )
-
-            pub_date = (
-                item.findtext(
-                    "pubDate",
-                    ""
-                )
-                .strip()
-            )
-
-            if not title:
-
-                continue
-
-            try:
-
-                dt = datetime.strptime(
-                    pub_date,
-                    "%a, %d %b %Y %H:%M:%S %Z"
-                ).replace(
-                    tzinfo=timezone.utc
-                )
-
-            except Exception:
-
-                dt = now
-
-            if (
-                now
-                -
-                dt
-                >
-                timedelta(
-                    hours=NEWS_HOURS
-                )
-            ):
-
-                continue
-
-            results.append({
-
-                "title":
-                    title,
-
-                "link":
-                    link,
-
-                "source":
-                    source,
-
-                "date":
-                    dt,
-
-                "language":
-                    language
-            })
-
-        return results[:MAX_NEWS]
-
-    except Exception as e:
-
-        print(
-            f"Error noticias "
-            f"{ticker}: {e}"
-        )
+    except Exception:
 
         return []
 
+    now = datetime.now(timezone.utc)
 
-# ============================================================
-# TRADUCCIÓN
-# ============================================================
+    items = []
 
-def translate_to_spanish(
-    text
-):
+    for item in root.findall(".//item"):
 
-    if not text:
+        title_el = item.find("title")
+        link_el = item.find("link")
+        date_el = item.find("pubDate")
+        source_el = item.find("source")
 
-        return ""
+        if title_el is None:
+            continue
 
-    api_key = os.getenv(
-        "GOOGLE_TRANSLATE_API_KEY",
-        ""
-    )
+        title = (
+            title_el.text or ""
+        ).strip()
 
-    if api_key:
+        link = (
+            link_el.text or ""
+        ).strip()
+        if link_el is not None
+        else ""
+
+        date_text = (
+            date_el.text or ""
+        ).strip()
+        if date_el is not None
+        else ""
+
+        source = (
+            source_el.text or ""
+        ).strip()
+        if source_el is not None
+        else ""
+
+        published = None
 
         try:
 
-            url = (
-                "https://translation.googleapis.com/"
-                "language/translate/v2"
-            )
-
-            response = requests.post(
-                url,
-                params={
-                    "key":
-                        api_key
-                },
-                json={
-                    "q":
-                        text,
-
-                    "target":
-                        "es",
-
-                    "format":
-                        "text"
-                },
-                timeout=15
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-            translated = (
-                data
-                .get("data", {})
-                .get(
-                    "translations",
-                    [{}]
-                )[0]
-                .get(
-                    "translatedText"
-                )
-            )
-
-            if translated:
-
-                return translated
+            published = pd.to_datetime(
+                date_text,
+                utc=True,
+            ).to_pydatetime()
 
         except Exception:
-
             pass
 
-    try:
-
-        url = (
-            "https://translate.googleapis.com/"
-            "translate_a/single"
-        )
-
-        params = {
-
-            "client":
-                "gtx",
-
-            "sl":
-                "auto",
-
-            "tl":
-                "es",
-
-            "dt":
-                "t",
-
-            "q":
-                text
-        }
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=15
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        translated = "".join(
-
-            part[0]
-
-            for part in data[0]
-
-            if (
-                isinstance(
-                    part,
-                    list
-                )
-                and
-                len(part) > 0
-            )
-        )
-
-        if translated:
-
-            return translated
-
-    except Exception:
-
-        pass
-
-    return text
-
-
-# ============================================================
-# CLASIFICACIÓN DE NOTICIAS
-# ============================================================
-
-def classify_news(
-    ticker
-):
-
-    spanish = get_news(
-        ticker,
-        "es"
-    )
-
-    english = get_news(
-        ticker,
-        "en"
-    )
-
-    all_news = []
-
-    seen = set()
-
-    for item in (
-        spanish
-        +
-        english
-    ):
-
-        key = (
-            item["title"]
-            .lower()
-            .strip()
-        )
-
-        if key in seen:
-
+        if published is None:
             continue
 
-        seen.add(key)
+        age_hours = (
+            now - published
+        ).total_seconds() / 3600
 
-        text = (
+        if age_hours < 0:
+            age_hours = 0
+
+        if age_hours > NEWS_HOURS:
+            continue
+
+        items.append({
+            "title": title,
+            "link": link,
+            "source": source,
+            "published": published,
+        })
+
+    # --------------------------------------------------------
+    # DEDUPLICACIÓN
+    # --------------------------------------------------------
+
+    unique = {}
+
+    for item in items:
+
+        key = normalize_text(
             item["title"]
-            .lower()
         )
 
-        positive_hits = sum(
-
-            1
-
-            for word
-            in POSITIVE_WORDS
-
-            if word.lower()
-            in text
+        key = re.sub(
+            r"[^a-z0-9áéíóúüñ ]",
+            "",
+            key,
         )
 
-        negative_hits = sum(
+        if key not in unique:
+            unique[key] = item
 
-            1
+    items = list(unique.values())
 
-            for word
-            in NEGATIVE_WORDS
-
-            if word.lower()
-            in text
-        )
-
-        risk_hits = sum(
-
-            1
-
-            for word
-            in RISK_WORDS
-
-            if word.lower()
-            in text
-        )
-
-        item[
-            "positive_hits"
-        ] = positive_hits
-
-        item[
-            "negative_hits"
-        ] = negative_hits
-
-        item[
-            "risk_hits"
-        ] = risk_hits
-
-        all_news.append(
-            item
-        )
-
-    all_news.sort(
-        key=lambda x: x["date"],
-        reverse=True
+    items.sort(
+        key=lambda x: x["published"],
+        reverse=True,
     )
 
-    all_news = all_news[
-        :MAX_NEWS
-    ]
+    return items[:MAX_NEWS]
 
-    positive = sum(
-        x["positive_hits"]
-        for x in all_news
+
+# ============================================================
+# 13. CLASIFICACIÓN DE NOTICIAS
+# ============================================================
+
+def classify_news(ticker):
+
+    articles = get_news(ticker)
+
+    if not articles:
+
+        return {
+            "articles": [],
+            "count": 0,
+            "impact": "SIN DATOS",
+            "risk_topics": [],
+            "positive_count": 0,
+            "negative_count": 0,
+            "risk_count": 0,
+        }
+
+    positive_count = 0
+    negative_count = 0
+    risk_count = 0
+
+    risk_topics = []
+
+    processed = []
+
+    special_topics = SPECIAL_TOPICS.get(
+        ticker,
+        []
     )
 
-    negative = sum(
-        x["negative_hits"]
-        for x in all_news
+    # Palabras especialmente negativas por sector.
+    bearish_special = {
+
+        "XOM": [
+            "oil falls",
+            "oil prices fall",
+            "oil price falls",
+            "crude falls",
+            "crude prices fall",
+            "brent falls",
+            "opec increases production",
+            "opec output increase",
+            "hormuz reopening",
+            "hormuz reopens",
+        ],
+
+        "REP.MC": [
+            "oil falls",
+            "crude falls",
+            "brent falls",
+            "opec increases production",
+            "hormuz reopening",
+        ],
+
+        "LLY": [
+            "fda rejection",
+            "trial failure",
+            "clinical trial failure",
+            "adverse events",
+            "safety concerns",
+        ],
+
+        "NVDA": [
+            "china export restrictions",
+            "export ban",
+            "chip restrictions",
+            "export controls",
+            "sales restrictions",
+        ],
+
+        "AMD": [
+            "china export restrictions",
+            "export ban",
+            "chip restrictions",
+            "export controls",
+        ],
+
+        "MU": [
+            "china export restrictions",
+            "memory demand falls",
+            "chip demand falls",
+        ],
+
+        "ASML.AS": [
+            "china export restrictions",
+            "export controls",
+            "china ban",
+        ],
+
+        "TSLA": [
+            "recall",
+            "autonomous crash",
+            "regulatory investigation",
+            "china sales fall",
+            "ev demand falls",
+        ],
+    }
+
+    bearish_terms = bearish_special.get(
+        ticker,
+        [],
     )
 
-    risk_hits = sum(
-        x["risk_hits"]
-        for x in all_news
-    )
+    for article in articles:
 
-    if negative >= positive + 2:
+        title = article["title"]
 
-        risk = "NEGATIVO"
+        text_lower = normalize_text(
+            title
+        )
 
-    elif positive >= negative + 2:
+        pos_hits = 0
+        neg_hits = 0
+        risk_hits = 0
 
-        risk = "POSITIVO"
+        for word in POSITIVE_WORDS:
 
-    elif negative > positive:
+            if normalize_text(word) in text_lower:
+                pos_hits += 1
 
-        risk = "NEGATIVO"
+        for word in NEGATIVE_WORDS:
 
-    elif positive > negative:
+            if normalize_text(word) in text_lower:
+                neg_hits += 1
 
-        risk = "POSITIVO"
+        for word in GENERAL_RISK_TERMS:
 
-    elif risk_hits > 0:
+            if normalize_text(word) in text_lower:
+                risk_hits += 1
 
-        risk = "MIXTO / RIESGO"
+                if word not in risk_topics:
+                    risk_topics.append(word)
+
+        for word in special_topics:
+
+            if normalize_text(word) in text_lower:
+                risk_hits += 1
+
+                if word not in risk_topics:
+                    risk_topics.append(word)
+
+        # Riesgo especial por empresa.
+        for word in bearish_terms:
+
+            if normalize_text(word) in text_lower:
+                neg_hits += 3
+
+        positive_count += pos_hits
+        negative_count += neg_hits
+        risk_count += risk_hits
+
+        processed.append({
+            **article,
+            "positive_hits": pos_hits,
+            "negative_hits": neg_hits,
+            "risk_hits": risk_hits,
+        })
+
+    # --------------------------------------------------------
+    # CLASIFICACIÓN CONSERVADORA
+    # --------------------------------------------------------
+
+    if negative_count >= positive_count + 2:
+
+        impact = "NEGATIVO"
+
+    elif negative_count > positive_count:
+
+        impact = "NEGATIVO"
+
+    elif positive_count >= negative_count + 2:
+
+        impact = "POSITIVO"
+
+    elif positive_count > negative_count:
+
+        impact = "POSITIVO"
+
+    elif risk_count > 0:
+
+        impact = "MIXTO / RIESGO"
 
     else:
 
-        risk = "MIXTO / NEUTRO"
-
-    positive_news = [
-
-        x for x in all_news
-
-        if (
-            x["positive_hits"]
-            >
-            x["negative_hits"]
-        )
-    ]
-
-    featured = None
-
-    if positive_news:
-
-        featured = positive_news[0]
-
-        if (
-            featured["language"]
-            ==
-            "en"
-        ):
-
-            featured[
-                "translated_title"
-            ] = translate_to_spanish(
-                featured["title"]
-            )
-
-        else:
-
-            featured[
-                "translated_title"
-            ] = featured["title"]
+        impact = "NEUTRO"
 
     return {
-
-        "risk":
-            risk,
-
-        "positive":
-            positive,
-
-        "negative":
-            negative,
-
-        "risk_hits":
-            risk_hits,
-
-        "count":
-            len(all_news),
-
-        "items":
-            all_news,
-
-        "featured":
-            featured
+        "articles": processed,
+        "count": len(processed),
+        "impact": impact,
+        "risk_topics": risk_topics[:10],
+        "positive_count": positive_count,
+        "negative_count": negative_count,
+        "risk_count": risk_count,
     }
 
 
 # ============================================================
-# TELEGRAM
+# 14. FILTROS
 # ============================================================
 
-def send_telegram(
-    message
+def evaluate_filters(
+    result,
+    market,
 ):
 
-    if (
-        not TELEGRAM_BOT_TOKEN
-        or
-        not TELEGRAM_CHAT_ID
-    ):
+    primary = {}
+    secondary = {}
+    safety = {}
 
-        print(
-            "\nTELEGRAM NO CONFIGURADO"
-        )
+    # --------------------------------------------------------
+    # PRINCIPALES
+    # --------------------------------------------------------
 
-        return False
-
-    # Telegram admite hasta 4096 caracteres.
-    # Dejamos margen para evitar errores.
-    if len(message) > 3900:
-
-        message = (
-            message[:3850]
-            +
-            "\n\n[Mensaje truncado]"
-        )
-
-    url = (
-        "https://api.telegram.org/"
-        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    primary["Score >= 75"] = (
+        result["score"] >= MIN_SCORE
     )
 
-    try:
-
-        response = requests.post(
-            url,
-            json={
-
-                "chat_id":
-                    TELEGRAM_CHAT_ID,
-
-                "text":
-                    message,
-
-                "disable_web_page_preview":
-                    True
-            },
-            timeout=20
-        )
-
-        response.raise_for_status()
-
-        return True
-
-    except Exception as e:
-
-        print(
-            f"Error Telegram: {e}"
-        )
-
-        return False
-
-
-# ============================================================
-# FORMATEAR DINERO
-# ============================================================
-
-def money(
-    value
-):
-
-    if (
-        value is None
-        or
-        pd.isna(value)
-    ):
-
-        return "N/D"
-
-    return (
-        f"{value:,.2f}"
-        .replace(",", "X")
-        .replace(".", ",")
-        .replace("X", ".")
-        +
-        " €"
+    primary["RSI <= 45"] = (
+        result["rsi"] <= MAX_RSI
     )
 
-
-def price(
-    value
-):
-
-    if (
-        value is None
-        or
-        pd.isna(value)
-    ):
-
-        return "N/D"
-
-    return (
-        f"{value:,.2f}"
-        .replace(",", "X")
-        .replace(".", ",")
-        .replace("X", ".")
+    primary["Precio <= 3% soporte"] = (
+        result["distance_support"]
+        <= MAX_SUPPORT_DISTANCE
     )
 
-
-# ============================================================
-# DIAGNÓSTICO
-# ============================================================
-
-def diagnostic_report(
-    candidate
-):
-
-    primary = candidate[
-        "primary_checks"
-    ]
-
-    secondary = candidate[
-        "secondary_checks"
-    ]
-
-    print(
-        "\n"
-        +
-        "=" * 70
+    primary["Noticias no negativas"] = (
+        result["news_impact"]
+        in ["POSITIVO", "NEUTRO", "MIXTO / RIESGO"]
     )
 
-    print(
-        f"🔎 DIAGNÓSTICO: "
-        f"{display_ticker(candidate['ticker'])}"
+    # Si no hay datos de noticias, NO se permite entrada.
+    if result["news_count"] == 0:
+        primary["Noticias no negativas"] = False
+
+    primary["R/R >= 2:1"] = (
+        result["reward_risk"] >= 2
     )
 
-    print(
-        f"Empresa: "
-        f"{display_name(candidate['ticker'])}"
+    # --------------------------------------------------------
+    # SECUNDARIOS
+    # --------------------------------------------------------
+
+    secondary["Rebote confirmado"] = (
+        result["rebound_confirmed"]
     )
 
-    print(
-        f"Precio: "
-        f"{price(candidate['price'])}"
+    secondary["Volumen >= 1.15x"] = (
+        result["volume_ratio"]
+        >= MIN_VOLUME_CONFIRMATION
     )
 
-    print(
-        f"Score: "
-        f"{candidate['score']}/100"
+    secondary["Cierre > máximo vela anterior"] = (
+        result["close_above_previous_high"]
     )
 
-    print(
-        f"RSI: "
-        f"{candidate['rsi']:.1f}"
+    secondary["S&P 500 favorable"] = (
+        market["favorable"]
     )
 
-    print(
-        f"Distancia soporte: "
-        f"{candidate['distance_support'] * 100:.2f}%"
+    secondary["Sin resultados +/- 3 días"] = (
+        not result["earnings_blocked"]
     )
 
-    print(
-        f"Volumen: "
-        f"{candidate['volume_ratio']:.2f}x"
+    # --------------------------------------------------------
+    # SEGURIDAD
+    # --------------------------------------------------------
+
+    safety["Liquidez suficiente"] = (
+        result["liquidity_ok"]
     )
 
-    print(
-        f"Liquidez media: "
-        f"{money(candidate['avg_dollar_volume'])}"
+    safety["Movimiento diario <= 8%"] = (
+        result["daily_move_ok"]
     )
 
-    print(
-        f"Movimiento diario: "
-        f"{candidate['daily_move'] * 100:.2f}%"
+    safety["Datos válidos"] = (
+        result["valid_data"]
     )
 
-    print(
-        f"Noticias: "
-        f"{candidate['news']['risk']}"
+    safety["Resultados no bloqueados"] = (
+        not result["earnings_blocked"]
     )
 
-    print(
-        f"R/R: "
-        f"{candidate['reward_risk']:.1f}:1"
+    # Noticias sin datos = bloqueo absoluto.
+    safety["Noticias disponibles"] = (
+        result["news_count"] > 0
     )
 
-    p_ok = sum(
+    # Noticias negativas = bloqueo absoluto.
+    safety["Sin noticia negativa"] = (
+        result["news_impact"]
+        != "NEGATIVO"
+    )
+
+    # Riesgo de mercado.
+    safety["Mercado favorable"] = (
+        market["favorable"]
+    )
+
+    result["primary_checks"] = primary
+    result["secondary_checks"] = secondary
+    result["safety_checks"] = safety
+
+    primary_pass = sum(
         primary.values()
     )
 
-    s_ok = sum(
+    secondary_pass = sum(
         secondary.values()
     )
 
-    print()
-
-    print(
-        f"🟢 PRINCIPALES: "
-        f"{p_ok}/5"
+    safety_pass = sum(
+        safety.values()
     )
 
-    for name, ok in primary.items():
+    result["primary_pass"] = primary_pass
+    result["secondary_pass"] = secondary_pass
+    result["safety_pass"] = safety_pass
 
-        print(
-            f"   "
-            f"{'✅' if ok else '❌'} "
-            f"{name}"
-        )
+    # --------------------------------------------------------
+    # CONFIRMACIÓN
+    # --------------------------------------------------------
 
-    print()
-
-    print(
-        f"🟡 SECUNDARIOS: "
-        f"{s_ok}/5"
+    all_primary = (
+        primary_pass == len(primary)
     )
 
-    for name, ok in secondary.items():
-
-        print(
-            f"   "
-            f"{'✅' if ok else '❌'} "
-            f"{name}"
-        )
-
-    print()
-
-    if (
-        p_ok == 5
-        and
-        s_ok == 5
-    ):
-
-        print(
-            "💎 RESULTADO: "
-            "CHOLLO CONFIRMADO"
-        )
-
-    elif (
-        p_ok == 5
-        and
-        s_ok == 4
-    ):
-
-        print(
-            "🟡 RESULTADO: "
-            "CHOLLO A VIGILAR"
-        )
-
-    else:
-
-        print(
-            "⚪ RESULTADO: "
-            "NO ENTRA"
-        )
-
-
-# ============================================================
-# MENSAJE DE OPERACIÓN
-# ============================================================
-
-def build_signal_message(
-    candidate,
-    confirmed=True
-):
-
-    ticker = candidate[
-        "ticker"
-    ]
-
-    name = display_name(
-        ticker
+    all_secondary = (
+        secondary_pass == len(secondary)
     )
 
-    position = candidate[
-        "position"
-    ]
+    all_safety = (
+        safety_pass == len(safety)
+    )
 
-    news = candidate[
-        "news"
-    ]
+    confirmed = (
+        all_primary
+        and all_secondary
+        and all_safety
+    )
+
+    # Noticias negativas SIEMPRE bloquean.
+    if result["news_impact"] == "NEGATIVO":
+        confirmed = False
+
+    # Datos inexistentes SIEMPRE bloquean.
+    if result["news_count"] == 0:
+        confirmed = False
+
+    # Sin acciones posibles, no hay señal.
+    if result.get("shares", 0) < 1:
+        confirmed = False
+
+    result["confirmed"] = confirmed
+
+    # Watchlist interna.
+    # No se envía a Telegram por defecto.
+    watch = (
+        all_primary
+        and not confirmed
+        and secondary_pass >= 4
+        and all_safety
+    )
+
+    if result["news_impact"] == "NEGATIVO":
+        watch = False
+
+    result["watch"] = watch
 
     if confirmed:
-
-        title = (
-            "💎 CHOLLO CONFIRMADO"
-        )
-
+        result["classification"] = "CONFIRMADA"
+    elif watch:
+        result["classification"] = "VIGILAR"
     else:
-
-        title = (
-            "🟡 CHOLLO A VIGILAR"
-        )
-
-    message = f"""
-{title}
-
-📌 {name} ({display_ticker(ticker)})
-
-💵 Entrada: {price(candidate['price'])}
-🛑 Stop: {price(candidate['stop'])}
-🎯 Objetivo 1: {price(candidate['target1'])}
-🎯 Objetivo 2: {price(candidate['target2'])}
-
-📊 Score: {candidate['score']}/100
-📉 RSI: {candidate['rsi']:.1f}
-📍 Soporte: {price(candidate['support'])}
-📐 Distancia soporte: {candidate['distance_support'] * 100:.2f}%
-📈 Volumen: {candidate['volume_ratio']:.2f}x media
-⚖️ R/R: {candidate['reward_risk']:.1f}:1
-
-💰 CAPITAL A INVERTIR:
-{money(position['capital_used_eur'])}
-
-📦 ACCIONES:
-{position['shares']}
-
-🔴 PÉRDIDA MÁXIMA ESTIMADA:
-{money(position['risk_eur'])}
-
-📰 Noticias analizadas: {news['count']}
-📰 Impacto: {news['risk']}
-
-🌎 Mercado S&P 500:
-{candidate['market_status']}
-
-📅 Resultados:
-{candidate['earnings_status']}
-""".strip()
+        result["classification"] = "NO ENTRA"
 
     # --------------------------------------------------------
-    # REGLA DE SEGURIDAD
+    # SEÑAL FINAL
     # --------------------------------------------------------
 
-    if news["risk"] == "NEGATIVO":
+    if result["news_impact"] == "NEGATIVO":
 
-        message += (
-            "\n\n🚨 SEÑAL FINAL: "
+        result["final_signal"] = (
+            "SEÑAL FINAL: "
             "PRECAUCIÓN — esperar"
         )
 
-    featured = news.get(
-        "featured"
-    )
+    elif confirmed:
 
-    if featured:
-
-        message += (
-            "\n\n🇪🇸 NOTICIA POSITIVA DESTACADA\n"
-            f"{featured['translated_title']}\n"
-            f"Fuente: {featured['source']}\n"
+        result["final_signal"] = (
+            "SEÑAL FINAL: "
+            "ENTRADA CONFIRMADA"
         )
 
-        if featured.get(
-            "link"
-        ):
+    elif watch:
 
-            message += (
-                f"{featured['link']}\n"
-            )
+        result["final_signal"] = (
+            "SEÑAL FINAL: "
+            "VIGILAR — todavía no entrar"
+        )
 
-    return message.strip()
+    else:
+
+        result["final_signal"] = (
+            "SEÑAL FINAL: "
+            "NO ENTRAR"
+        )
+
+    return result
 
 
 # ============================================================
-# DIAGNÓSTICO PARA TELEGRAM
+# 15. DIAGNÓSTICO
 # ============================================================
 
-def build_diagnostic_message(
-    candidate
+def diagnostic_report(
+    result,
+    market,
 ):
 
-    primary = candidate[
+    ticker = result["ticker"]
+
+    lines = []
+
+    lines.append(
+        f"🔎 {display_ticker(ticker)} — "
+        f"{result['name']}"
+    )
+
+    if not result["valid_data"]:
+
+        lines.append("")
+        lines.append(
+            f"❌ {result['error']}"
+        )
+        lines.append(
+            "⚪ NO ENTRA"
+        )
+
+        return "\n".join(lines)
+
+    lines.append("")
+
+    lines.append(
+        f"💵 Precio: "
+        f"{fmt_price(ticker, result['price'])}"
+    )
+
+    lines.append(
+        f"📊 Score: "
+        f"{result['score']}/100"
+    )
+
+    lines.append(
+        f"📉 RSI: "
+        f"{fmt_number(result['rsi'], 1)}"
+    )
+
+    lines.append(
+        f"📍 Soporte: "
+        f"{fmt_price(ticker, result['support'])}"
+    )
+
+    lines.append(
+        f"📐 Distancia soporte: "
+        f"{fmt_number(result['distance_support'] * 100, 2)}%"
+    )
+
+    lines.append(
+        f"📈 Volumen: "
+        f"{fmt_number(result['volume_ratio'], 2)}x"
+    )
+
+    lines.append(
+        f"⚖️ R/R: "
+        f"{fmt_number(result['reward_risk'], 1)}:1"
+    )
+
+    lines.append(
+        f"💧 Liquidez media: "
+        f"{fmt_eur(result['avg_dollar_volume'] / result['eurusd'])}"
+        if result.get("eurusd", 1) > 0
+        else
+        f"💧 Liquidez media: "
+        f"{fmt_number(result['avg_dollar_volume'])}"
+    )
+
+    lines.append(
+        f"📰 Noticias analizadas: "
+        f"{result['news_count']}"
+    )
+
+    lines.append(
+        f"📰 Impacto: "
+        f"{result['news_impact']}"
+    )
+
+    if result["news_risk_topics"]:
+
+        lines.append(
+            "⚠️ Riesgos detectados: "
+            + ", ".join(
+                result["news_risk_topics"][:6]
+            )
+        )
+
+    lines.append("")
+
+    lines.append(
+        f"🟢 PRINCIPALES: "
+        f"{result['primary_pass']}/5"
+    )
+
+    for name, passed in result[
         "primary_checks"
-    ]
+    ].items():
 
-    secondary = candidate[
+        lines.append(
+            f"{'✅' if passed else '❌'} {name}"
+        )
+
+    lines.append("")
+
+    lines.append(
+        f"🟡 SECUNDARIOS: "
+        f"{result['secondary_pass']}/5"
+    )
+
+    for name, passed in result[
         "secondary_checks"
-    ]
+    ].items():
 
-    p_ok = sum(
-        primary.values()
+        lines.append(
+            f"{'✅' if passed else '❌'} {name}"
+        )
+
+    lines.append("")
+
+    lines.append(
+        f"🛡️ SEGURIDAD: "
+        f"{result['safety_pass']}/"
+        f"{len(result['safety_checks'])}"
     )
 
-    s_ok = sum(
-        secondary.values()
-    )
+    for name, passed in result[
+        "safety_checks"
+    ].items():
 
-    failed_primary = [
+        lines.append(
+            f"{'✅' if passed else '❌'} {name}"
+        )
 
-        name
+    lines.append("")
 
-        for name, ok
-        in primary.items()
+    if result["classification"] == "CONFIRMADA":
 
-        if not ok
-    ]
-
-    failed_secondary = [
-
-        name
-
-        for name, ok
-        in secondary.items()
-
-        if not ok
-    ]
-
-    if (
-        p_ok == 5
-        and
-        s_ok == 5
-    ):
-
-        result = (
+        lines.append(
             "💎 CHOLLO CONFIRMADO"
         )
 
-    elif (
-        p_ok == 5
-        and
-        s_ok == 4
-    ):
+    elif result["classification"] == "VIGILAR":
 
-        result = (
+        lines.append(
             "🟡 CANDIDATA A VIGILAR"
         )
 
     else:
 
-        result = (
+        lines.append(
             "⚪ NO ENTRA"
         )
 
-    message = f"""
-🔎 {display_ticker(candidate['ticker'])} — {display_name(candidate['ticker'])}
+    # Principales que falla
+    primary_failures = [
+        name
+        for name, passed
+        in result["primary_checks"].items()
+        if not passed
+    ]
 
-💵 Precio: {price(candidate['price'])}
-📊 Score: {candidate['score']}/100
-📉 RSI: {candidate['rsi']:.1f}
-📍 Soporte: {price(candidate['support'])}
-📐 Distancia soporte: {candidate['distance_support'] * 100:.2f}%
-📈 Volumen: {candidate['volume_ratio']:.2f}x
-⚖️ R/R: {candidate['reward_risk']:.1f}:1
-📰 Noticias analizadas: {candidate['news']['count']}
-📰 Impacto: {candidate['news']['risk']}
+    if primary_failures:
 
-🟢 PRINCIPALES: {p_ok}/5
-""".strip()
-
-    for name, ok in primary.items():
-
-        message += (
-            f"\n"
-            f"{'✅' if ok else '❌'} "
-            f"{name}"
+        lines.append("")
+        lines.append(
+            "❌ PRINCIPALES QUE FALLA:"
         )
 
-    message += (
-        f"\n\n🟡 SECUNDARIOS: "
-        f"{s_ok}/5"
-    )
+        for failure in primary_failures:
 
-    for name, ok in secondary.items():
-
-        message += (
-            f"\n"
-            f"{'✅' if ok else '❌'} "
-            f"{name}"
-        )
-
-    message += (
-        f"\n\n{result}"
-    )
-
-    if failed_primary:
-
-        message += (
-            "\n\n❌ PRINCIPALES QUE FALLA:"
-        )
-
-        for item in failed_primary:
-
-            message += (
-                f"\n• {item}"
+            lines.append(
+                f"• {failure}"
             )
 
-    if failed_secondary:
+    # Secundarios que falla
+    secondary_failures = [
+        name
+        for name, passed
+        in result["secondary_checks"].items()
+        if not passed
+    ]
 
-        message += (
-            "\n\n⚠️ SECUNDARIOS QUE FALLA:"
+    if secondary_failures:
+
+        lines.append("")
+        lines.append(
+            "⚠️ SECUNDARIOS QUE FALLA:"
         )
 
-        for item in failed_secondary:
+        for failure in secondary_failures:
 
-            message += (
-                f"\n• {item}"
+            lines.append(
+                f"• {failure}"
             )
 
-    if candidate["news"]["risk"] == "NEGATIVO":
+    lines.append("")
+    lines.append(
+        f"🚨 {result['final_signal']}"
+    )
 
-        message += (
-            "\n\n🚨 SEÑAL FINAL: "
-            "PRECAUCIÓN — esperar"
-        )
-
-    return message.strip()
+    return "\n".join(lines)
 
 
 # ============================================================
-# RESUMEN
+# 16. MENSAJE DE SEÑAL CONFIRMADA
+# ============================================================
+
+def build_signal_message(result):
+
+    ticker = result["ticker"]
+
+    lines = []
+
+    lines.append(
+        "💎💎💎 "
+        "CHOLLO CONFIRMADO"
+    )
+
+    lines.append("")
+
+    lines.append(
+        f"🏢 {result['name']}"
+    )
+
+    lines.append(
+        f"📌 {display_ticker(ticker)}"
+    )
+
+    lines.append("")
+
+    lines.append(
+        f"💵 Entrada: "
+        f"{fmt_price(ticker, result['price'])}"
+    )
+
+    lines.append(
+        f"🛑 Stop: "
+        f"{fmt_price(ticker, result['stop'])}"
+    )
+
+    lines.append(
+        f"🎯 Objetivo 1: "
+        f"{fmt_price(ticker, result['target1'])}"
+    )
+
+    lines.append(
+        f"🎯 Objetivo 2: "
+        f"{fmt_price(ticker, result['target2'])}"
+    )
+
+    lines.append("")
+
+    lines.append(
+        f"📊 Score: "
+        f"{result['score']}/100"
+    )
+
+    lines.append(
+        f"📉 RSI: "
+        f"{fmt_number(result['rsi'], 1)}"
+    )
+
+    lines.append(
+        f"📍 Soporte: "
+        f"{fmt_price(ticker, result['support'])}"
+    )
+
+    lines.append(
+        f"📐 Distancia soporte: "
+        f"{fmt_number(result['distance_support'] * 100, 2)}%"
+    )
+
+    lines.append(
+        f"📈 Volumen: "
+        f"{fmt_number(result['volume_ratio'], 2)}x"
+    )
+
+    lines.append(
+        f"⚖️ R/R: "
+        f"{fmt_number(result['reward_risk'], 1)}:1"
+    )
+
+    lines.append("")
+
+    lines.append(
+        f"💰 Capital utilizado: "
+        f"{fmt_eur(result['capital_used_eur'])}"
+    )
+
+    lines.append(
+        f"📦 Acciones: "
+        f"{result['shares']}"
+    )
+
+    lines.append(
+        f"🔴 Riesgo estimado: "
+        f"{fmt_eur(result['risk_eur'])}"
+    )
+
+    lines.append(
+        f"🔴 Riesgo máximo permitido: "
+        f"{fmt_eur(result['max_risk_eur'])}"
+    )
+
+    lines.append("")
+
+    lines.append(
+        f"📰 Noticias analizadas: "
+        f"{result['news_count']}"
+    )
+
+    lines.append(
+        f"📰 Impacto: "
+        f"{result['news_impact']}"
+    )
+
+    if result["news_risk_topics"]:
+
+        lines.append(
+            "⚠️ Temas de riesgo: "
+            + ", ".join(
+                result["news_risk_topics"][:6]
+            )
+        )
+
+    lines.append("")
+
+    lines.append(
+        f"🌎 S&P 500: "
+        f"{'FAVORABLE' if result['market_favorable'] else 'DESFAVORABLE'}"
+    )
+
+    lines.append(
+        f"📅 Resultados: "
+        f"{result['earnings_status']}"
+    )
+
+    lines.append("")
+
+    # Mostrar una noticia relevante.
+    articles = result.get(
+        "news",
+        [],
+    )
+
+    if articles:
+
+        lines.append(
+            "📰 NOTICIA RELEVANTE:"
+        )
+
+        featured = articles[0]
+
+        lines.append(
+            f"• {featured['title']}"
+        )
+
+        if featured.get("source"):
+
+            lines.append(
+                f"Fuente: "
+                f"{featured['source']}"
+            )
+
+        lines.append("")
+
+    lines.append(
+        "🚨 SEÑAL FINAL: "
+        "ENTRADA CONFIRMADA"
+    )
+
+    lines.append(
+        "⚠️ Ejecutar siempre respetando "
+        "el stop indicado."
+    )
+
+    return "\n".join(lines)
+
+
+# ============================================================
+# 17. TELEGRAM
+# ============================================================
+
+def send_telegram(message):
+
+    if not TELEGRAM_BOT_TOKEN:
+        print(
+            "⚠️ TELEGRAM_BOT_TOKEN no configurado."
+        )
+        return False
+
+    if not TELEGRAM_CHAT_ID:
+        print(
+            "⚠️ TELEGRAM_CHAT_ID no configurado."
+        )
+        return False
+
+    # Telegram admite 4096 caracteres.
+    # Dejamos margen de seguridad.
+    if len(message) > 3900:
+
+        message = (
+            message[:3850]
+            + "\n\n[Mensaje truncado]"
+        )
+
+    url = (
+        "https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}"
+        "/sendMessage"
+    )
+
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+    }
+
+    try:
+
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=20,
+        )
+
+        if response.ok:
+            return True
+
+        print(
+            "❌ Error Telegram:",
+            response.text[:500],
+        )
+
+        return False
+
+    except Exception as e:
+
+        print(
+            "❌ Error enviando Telegram:",
+            e,
+        )
+
+        return False
+
+
+# ============================================================
+# 18. RESUMEN FINAL
 # ============================================================
 
 def build_summary(
-    confirmed,
-    watchlist,
-    rejected,
-    market
+    results,
+    market,
 ):
 
-    return f"""
-📊 ESCÁNER DE CHOLLOS PARA DEGIRO
+    confirmed = [
+        r for r in results
+        if r["classification"]
+        == "CONFIRMADA"
+    ]
 
-💎 CHOLLOS CONFIRMADOS:
-{len(confirmed)}
+    watch = [
+        r for r in results
+        if r["classification"]
+        == "VIGILAR"
+    ]
 
-🟡 CANDIDATAS A VIGILAR:
-{len(watchlist)}
+    rejected = [
+        r for r in results
+        if r["classification"]
+        == "NO ENTRA"
+    ]
 
-⚪ NO ENTRAN:
-{len(rejected)}
+    lines = []
 
-💰 Capital:
-{money(CAPITAL_EUR)}
+    lines.append(
+        "📊 ESCÁNER DE CHOLLOS PARA DEGIRO"
+    )
 
-🔴 Riesgo máximo:
-{money(CAPITAL_EUR * RISK_PER_TRADE)}
+    lines.append("")
 
-🌎 S&P 500:
-{market['status']}
+    lines.append(
+        f"💎 CHOLLOS CONFIRMADOS: "
+        f"{len(confirmed)}"
+    )
 
-Filtros principales:
-• Score >=75
-• RSI <=45
-• Precio <=3% soporte
-• Noticias no negativas
-• R/R >=2:1
+    lines.append(
+        f"🟡 CANDIDATAS A VIGILAR: "
+        f"{len(watch)}"
+    )
 
-Filtros secundarios:
-• Rebote confirmado
-• Volumen >=1.15x
-• Cierre > máximo vela anterior
-• S&P 500 favorable
-• Sin resultados +/-3 días
+    lines.append(
+        f"⚪ NO ENTRAN: "
+        f"{len(rejected)}"
+    )
 
-📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}
-""".strip()
+    lines.append("")
+
+    lines.append(
+        f"🔎 Instrumentos analizados: "
+        f"{len(results)}"
+    )
+
+    lines.append(
+        f"💰 Capital: "
+        f"{fmt_eur(CAPITAL_EUR)}"
+    )
+
+    lines.append(
+        f"🔴 Riesgo máximo: "
+        f"{fmt_eur(CAPITAL_EUR * RISK_PER_TRADE)}"
+    )
+
+    lines.append("")
+
+    lines.append(
+        "🌎 S&P 500: "
+        f"{market['status']}"
+    )
+
+    lines.append("")
+
+    lines.append(
+        "🛡️ SOLO SE ENVÍAN ALERTAS "
+        "DE ENTRADA CONFIRMADA"
+    )
+
+    lines.append("")
+
+    if confirmed:
+
+        lines.append(
+            "💎 SEÑALES CONFIRMADAS:"
+        )
+
+        for result in confirmed:
+
+            lines.append(
+                f"• {display_ticker(result['ticker'])} "
+                f"— {result['name']} "
+                f"— Score {result['score']}/100"
+            )
+
+    else:
+
+        lines.append(
+            "💎 SEÑALES CONFIRMADAS:"
+        )
+
+        lines.append(
+            "• Ninguna"
+        )
+
+    lines.append("")
+
+    if watch:
+
+        lines.append(
+            f"🟡 {len(watch)} "
+            "candidatas cumplen los principales "
+            "pero no reciben alerta."
+        )
+
+    lines.append("")
+
+    now = datetime.now()
+
+    lines.append(
+        f"📅 {now.strftime('%d/%m/%Y %H:%M')}"
+    )
+
+    return "\n".join(lines)
 
 
 # ============================================================
-# MAIN
+# 19. MOTIVOS ESTADÍSTICOS DE DESCARTE
+# ============================================================
+
+def build_rejection_statistics(results):
+
+    counters = {}
+
+    for result in results:
+
+        if not result["valid_data"]:
+
+            key = "Datos insuficientes"
+            counters[key] = (
+                counters.get(key, 0) + 1
+            )
+
+            continue
+
+        for name, passed in result[
+            "primary_checks"
+        ].items():
+
+            if not passed:
+
+                counters[name] = (
+                    counters.get(name, 0)
+                    + 1
+                )
+
+        for name, passed in result[
+            "secondary_checks"
+        ].items():
+
+            if not passed:
+
+                counters[name] = (
+                    counters.get(name, 0)
+                    + 1
+                )
+
+        for name, passed in result[
+            "safety_checks"
+        ].items():
+
+            if not passed:
+
+                counters[name] = (
+                    counters.get(name, 0)
+                    + 1
+                )
+
+    return counters
+
+
+# ============================================================
+# 20. MAIN
 # ============================================================
 
 def main():
 
+    print("")
     print(
-        "\n"
-        +
-        "=" * 70
+        "=================================================="
     )
-
     print(
         "📊 ESCÁNER DE CHOLLOS PARA DEGIRO"
     )
+    print(
+        "=================================================="
+    )
+    print("")
 
     print(
-        "=" * 70
+        f"💰 Capital: {fmt_eur(CAPITAL_EUR)}"
     )
 
     print(
-        f"\nCapital: "
-        f"{money(CAPITAL_EUR)}"
+        f"🔴 Riesgo máximo: "
+        f"{fmt_eur(CAPITAL_EUR * RISK_PER_TRADE)}"
     )
 
     print(
-        f"Riesgo máximo por operación: "
-        f"{RISK_PER_TRADE * 100:.1f}%"
+        f"🔎 Instrumentos: {len(TICKERS)}"
     )
 
-    print(
-        f"Riesgo máximo: "
-        f"{money(CAPITAL_EUR * RISK_PER_TRADE)}"
-    )
+    print("")
 
     # --------------------------------------------------------
     # MERCADO
     # --------------------------------------------------------
 
+    print(
+        "🌎 Analizando S&P 500..."
+    )
+
     market = get_market_regime()
 
     print(
-        "\n🌎 S&P 500:"
-    )
-
-    print(
-        f"   Estado: "
+        f"🌎 S&P 500: "
         f"{market['status']}"
     )
 
     # --------------------------------------------------------
-    # EUR/USD
+    # EURUSD
     # --------------------------------------------------------
+
+    print(
+        "💱 Obteniendo EUR/USD..."
+    )
 
     eurusd = get_eurusd()
 
     print(
-        f"\n💱 EUR/USD: "
-        f"{eurusd:.4f}"
+        f"💱 EUR/USD: "
+        f"{fmt_number(eurusd, 4)}"
     )
 
+    print("")
+
     # --------------------------------------------------------
-    # ESCANEO
+    # ANÁLISIS DE TODOS
     # --------------------------------------------------------
 
-    candidates = []
+    results = []
 
-    print(
-        "\n🔍 Analizando "
-        f"{len(TICKERS)} instrumentos..."
-    )
+    for index, ticker in enumerate(
+        TICKERS,
+        start=1,
+    ):
 
-    for ticker in TICKERS:
+        print(
+            f"[{index}/{len(TICKERS)}] "
+            f"Analizando {ticker}..."
+        )
 
-        try:
+        result = analyze_ticker(
+            ticker
+        )
 
-            result = analyze_ticker(
-                ticker
-            )
+        if not result["valid_data"]:
 
-            if result is None:
+            results.append(result)
 
-                continue
+            continue
 
-            # ------------------------------------------------
-            # IMPORTANTE
-            #
-            # Solo los valores con Score >=75 pasan a
-            # noticias/resultados. Así evitamos hacer decenas
-            # de consultas externas innecesarias.
-            # ------------------------------------------------
+        result["eurusd"] = eurusd
 
-            if (
-                result["score"]
-                <
-                MIN_SCORE
-            ):
+        # ----------------------------------------------------
+        # NOTICIAS
+        #
+        # Solo necesitamos noticias para instrumentos
+        # que tienen posibilidades reales de superar el
+        # Score mínimo.
+        #
+        # Si no llegan al Score, ya quedan descartados,
+        # pero siguen apareciendo en el diagnóstico.
+        # ----------------------------------------------------
 
-                continue
+        if result["score"] >= MIN_SCORE:
 
             print(
-                f"\n📌 Analizando "
-                f"{display_ticker(ticker)}..."
+                f"   📰 Analizando noticias..."
             )
 
-            # ------------------------------------------------
-            # NOTICIAS
-            # ------------------------------------------------
-
-            news = classify_news(
+            news_data = classify_news(
                 ticker
             )
 
-            result[
-                "news"
-            ] = news
+            result["news"] = (
+                news_data["articles"]
+            )
 
-            # ------------------------------------------------
+            result["news_count"] = (
+                news_data["count"]
+            )
+
+            result["news_impact"] = (
+                news_data["impact"]
+            )
+
+            result["news_risk_topics"] = (
+                news_data["risk_topics"]
+            )
+
+            # ----------------------------------------------
             # RESULTADOS
-            # ------------------------------------------------
-
-            earnings = (
-                get_earnings_status(
-                    ticker
-                )
-            )
-
-            result[
-                "earnings"
-            ] = earnings
-
-            # ------------------------------------------------
-            # POSICIÓN
-            # ------------------------------------------------
-
-            position = (
-                calculate_position(
-                    ticker,
-                    result["price"],
-                    result["stop"],
-                    eurusd
-                )
-            )
-
-            result[
-                "position"
-            ] = position
-
-            # ------------------------------------------------
-            # PRINCIPALES
-            # ------------------------------------------------
-
-            primary_checks = {
-
-                "Score >= 75":
-                    result["score"]
-                    >= MIN_SCORE,
-
-                "RSI <= 45":
-                    result["rsi"]
-                    <= MAX_RSI,
-
-                "Precio <= 3% del soporte":
-                    result["distance_support"]
-                    <= MAX_SUPPORT_DISTANCE,
-
-                "Noticias no negativas":
-                    news["risk"]
-                    in (
-                        "POSITIVO",
-                        "MIXTO / NEUTRO",
-                        "MIXTO / RIESGO"
-                    ),
-
-                "R/R >= 2:1":
-                    result["reward_risk"]
-                    >= 2.0
-            }
-
-            # ------------------------------------------------
-            # SECUNDARIOS
-            # ------------------------------------------------
-
-            secondary_checks = {
-
-                "Rebote confirmado":
-                    result[
-                        "rebound_confirmed"
-                    ],
-
-                "Volumen >= 1.15x":
-                    result[
-                        "volume_confirmation"
-                    ],
-
-                "Cierre > máximo vela anterior":
-                    result[
-                        "close_above_previous_high"
-                    ],
-
-                "S&P 500 favorable":
-                    market["ok"],
-
-                "Sin resultados +/- 3 días":
-                    not earnings["blocked"]
-            }
-
-            result[
-                "primary_checks"
-            ] = primary_checks
-
-            result[
-                "secondary_checks"
-            ] = secondary_checks
-
-            result[
-                "market_status"
-            ] = market["status"]
-
-            result[
-                "earnings_status"
-            ] = earnings["status"]
-
-            # ------------------------------------------------
-            # FILTROS ADICIONALES INFORMATIVOS
-            # ------------------------------------------------
-
-            result[
-                "liquidity_ok"
-            ] = (
-                result[
-                    "avg_dollar_volume"
-                ]
-                >=
-                MIN_AVG_DOLLAR_VOLUME
-            )
-
-            result[
-                "daily_move_ok"
-            ] = (
-                abs(
-                    result[
-                        "daily_move"
-                    ]
-                )
-                <=
-                MAX_DAILY_MOVE
-            )
-
-            result[
-                "extra_checks"
-            ] = {
-
-                "Liquidez media >= 5M":
-                    result[
-                        "liquidity_ok"
-                    ],
-
-                "Movimiento diario <= 8%":
-                    result[
-                        "daily_move_ok"
-                    ]
-            }
-
-            # ------------------------------------------------
-            # DIAGNÓSTICO
-            # ------------------------------------------------
-
-            diagnostic_report(
-                result
-            )
-
-            candidates.append(
-                result
-            )
-
-        except Exception as e:
+            # ----------------------------------------------
 
             print(
-                f"\n⚠️ Error en "
-                f"{ticker}: {e}"
+                f"   📅 Comprobando resultados..."
             )
 
-    # ========================================================
-    # CLASIFICACIÓN FINAL
-    # ========================================================
-
-    confirmed = []
-
-    watchlist = []
-
-    rejected = []
-
-    for candidate in candidates:
-
-        primary_ok = all(
-            candidate[
-                "primary_checks"
-            ].values()
-        )
-
-        secondary_count = sum(
-            candidate[
-                "secondary_checks"
-            ].values()
-        )
-
-        shares = candidate[
-            "position"
-        ][
-            "shares"
-        ]
-
-        news_negative = (
-            candidate[
-                "news"
-            ][
-                "risk"
-            ]
-            ==
-            "NEGATIVO"
-        )
-
-        # ----------------------------------------------------
-        # CONFIRMADO
-        # ----------------------------------------------------
-
-        if (
-            primary_ok
-            and
-            secondary_count == 5
-            and
-            shares >= 1
-            and
-            not news_negative
-        ):
-
-            confirmed.append(
-                candidate
+            earnings = get_earnings_status(
+                ticker
             )
 
-        # ----------------------------------------------------
-        # VIGILAR
-        # ----------------------------------------------------
-
-        elif (
-            primary_ok
-            and
-            secondary_count == 4
-            and
-            shares >= 1
-            and
-            not news_negative
-        ):
-
-            watchlist.append(
-                candidate
+            result["earnings_blocked"] = (
+                earnings["blocked"]
             )
 
-        # ----------------------------------------------------
-        # NO ENTRA
-        # ----------------------------------------------------
+            result["earnings_status"] = (
+                earnings["status"]
+            )
 
         else:
 
-            rejected.append(
-                candidate
+            result["news"] = []
+            result["news_count"] = 0
+            result["news_impact"] = (
+                "NO EVALUADO — score insuficiente"
             )
 
-    # ========================================================
-    # RESULTADO FINAL
-    # ========================================================
+            result["earnings_blocked"] = False
+            result["earnings_status"] = (
+                "NO EVALUADO — score insuficiente"
+            )
 
+        # ----------------------------------------------------
+        # POSICIÓN
+        # ----------------------------------------------------
+
+        position = calculate_position(
+            ticker,
+            result.get("price"),
+            result.get("stop"),
+            eurusd,
+        )
+
+        result.update(position)
+
+        # ----------------------------------------------------
+        # FILTROS
+        # ----------------------------------------------------
+
+        # El mercado se añade al resultado.
+        result["market_favorable"] = (
+            market["favorable"]
+        )
+
+        evaluate_filters(
+            result,
+            market,
+        )
+
+        results.append(result)
+
+    # --------------------------------------------------------
+    # DIAGNÓSTICO LOCAL
+    # --------------------------------------------------------
+
+    print("")
     print(
-        "\n"
-        +
-        "=" * 70
+        "=================================================="
     )
-
     print(
-        "📊 RESULTADO FINAL"
+        "🔎 DIAGNÓSTICO DETALLADO"
     )
-
     print(
-        "=" * 70
+        "=================================================="
     )
+    print("")
 
-    print(
-        f"\n💎 CHOLLOS CONFIRMADOS: "
-        f"{len(confirmed)}"
-    )
+    for result in results:
 
-    print(
-        f"🟡 CANDIDATAS A VIGILAR: "
-        f"{len(watchlist)}"
-    )
+        print(
+            diagnostic_report(
+                result,
+                market,
+            )
+        )
 
-    print(
-        f"⚪ NO ENTRAN: "
-        f"{len(rejected)}"
-    )
-
-    # ========================================================
-    # TELEGRAM
-    # ========================================================
-
-    telegram_messages = []
+        print("")
+        print(
+            "--------------------------------------------------"
+        )
+        print("")
 
     # --------------------------------------------------------
     # RESUMEN
     # --------------------------------------------------------
 
-    telegram_messages.append(
-        build_summary(
-            confirmed,
-            watchlist,
-            rejected,
-            market
-        )
+    summary = build_summary(
+        results,
+        market,
     )
 
+    print(summary)
+
     # --------------------------------------------------------
-    # CONFIRMADOS
+    # ESTADÍSTICAS
     # --------------------------------------------------------
 
-    for candidate in confirmed:
+    stats = build_rejection_statistics(
+        results
+    )
 
-        message = (
-            build_signal_message(
-                candidate,
-                True
-            )
-        )
+    print("")
+    print(
+        "📊 PRINCIPALES MOTIVOS DE DESCARTE:"
+    )
+
+    sorted_stats = sorted(
+        stats.items(),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+
+    for reason, count in sorted_stats[:15]:
 
         print(
-            "\n"
-            +
-            message
-        )
-
-        telegram_messages.append(
-            message
+            f"• {reason}: {count}"
         )
 
     # --------------------------------------------------------
-    # VIGILANCIA
+    # TELEGRAM
     # --------------------------------------------------------
 
-    for candidate in watchlist:
+    print("")
+    print(
+        "📲 Preparando alertas Telegram..."
+    )
 
-        message = (
-            build_signal_message(
-                candidate,
-                False
-            )
-        )
-
-        failed_secondary = [
-
-            name
-
-            for name, ok
-            in candidate[
-                "secondary_checks"
-            ].items()
-
-            if not ok
-        ]
-
-        message += (
-            "\n\n⚠️ SECUNDARIO QUE FALLA:\n"
-            +
-            "\n".join(
-                "❌ " + x
-                for x
-                in failed_secondary
-            )
-        )
-
-        print(
-            "\n"
-            +
-            message
-        )
-
-        telegram_messages.append(
-            message
-        )
+    confirmed = [
+        r for r in results
+        if r["classification"]
+        == "CONFIRMADA"
+    ]
 
     # --------------------------------------------------------
-    # DIAGNÓSTICO DETALLADO
+    # SOLO CONFIRMADAS
     # --------------------------------------------------------
 
-    if candidates:
+    if confirmed:
 
-        telegram_messages.append(
-            "🔎 DIAGNÓSTICO DETALLADO\n\n"
-            "Cada instrumento que alcanzó "
-            "Score >=75 aparece abajo con "
-            "todos sus filtros."
-        )
+        for result in confirmed:
 
-        for candidate in candidates:
-
-            detail = (
-                build_diagnostic_message(
-                    candidate
-                )
+            message = build_signal_message(
+                result
             )
 
             print(
-                "\n"
-                +
-                detail
+                f"📲 Enviando señal: "
+                f"{display_ticker(result['ticker'])}"
             )
 
-            telegram_messages.append(
-                detail
+            send_telegram(
+                message
             )
+
+            time.sleep(1)
 
     else:
 
-        telegram_messages.append(
-            "🔎 DIAGNÓSTICO DETALLADO\n\n"
-            "Ningún instrumento alcanzó "
-            "Score >=75 en esta ejecución."
+        print(
+            "ℹ️ No hay ninguna entrada "
+            "confirmada. No se envía alerta de compra."
         )
 
-    # ========================================================
-    # ENVÍO
-    # ========================================================
+    # --------------------------------------------------------
+    # RESUMEN
+    #
+    # Se envía aunque no haya señales para que puedas
+    # comprobar que el bot sigue funcionando.
+    # --------------------------------------------------------
 
-    for message in telegram_messages:
-
-        send_telegram(
-            message
-        )
-
-    print(
-        "\n"
-        +
-        "=" * 70
+    send_telegram(
+        summary
     )
 
+    print("")
     print(
-        "✅ ESCÁNER TERMINADO"
+        "=================================================="
     )
-
     print(
-        "=" * 70
+        "✅ ESCÁNER FINALIZADO"
+    )
+    print(
+        "=================================================="
     )
 
 
 # ============================================================
-# EJECUCIÓN
+# 21. EJECUCIÓN
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
