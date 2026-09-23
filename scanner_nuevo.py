@@ -840,6 +840,35 @@ def format_alert(x):
         "y riesgo de la operación controlado."
     )
 
+def format_watch_alert(x):
+    failed = x.get("failed_secondary", [])
+    failed_text = ", ".join(failed) if failed else "Ninguna"
+
+    return (
+        f"🟡 CHOLLO A VIGILAR — {display_ticker(x['ticker'])}\n\n"
+        f"💰 Precio actual: {format_price(x['price'], x['ticker'])}\n"
+        f"📊 Score: {x['score']}/100\n"
+        f"📉 RSI: {x['rsi']:.1f}\n"
+        f"📍 Soporte: {format_price(x['support'], x['ticker'])}\n"
+        f"📏 Distancia al soporte: {x['distance_support']:.1%}\n"
+        f"📈 Volumen: {x['vol_ratio']:.2f}x media\n\n"
+        f"🟢 ENTRADA: {format_price(x['price'], x['ticker'])}\n"
+        f"🛑 STOP: {format_price(x['stop'], x['ticker'])}\n"
+        f"🎯 OBJETIVO 1: {format_price(x['target1'], x['ticker'])}\n"
+        f"🎯 OBJETIVO 2: {format_price(x['target2'], x['ticker'])}\n"
+        f"⚖️ Beneficio/Riesgo: {x['reward_risk']:.1f}:1\n"
+        f"💶 DINERO A METER: {x['position']['capital_used_eur']:.2f} €\n"
+        f"🔢 TÍTULOS: {x['position']['shares']}\n"
+        f"⚠️ PÉRDIDA MÁXIMA AL STOP: {x['position']['risk_eur']:.2f} €\n\n"
+        f"✅ PRINCIPALES: {x['primary_ok']}/5\n"
+        f"🟡 SECUNDARIAS: {x['secondary_ok']}/5\n"
+        f"⚠️ FALLA SECUNDARIA: {failed_text}\n\n"
+        f"{format_news(x['news_data'])}\n\n"
+        "🟡 SEÑAL FINAL: CHOLLO A VIGILAR\n"
+        "Cumple todas las condiciones principales y falla solo una secundaria."
+    )
+
+
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("\nTelegram no configurado. Resultado:\n")
@@ -902,6 +931,7 @@ def main():
 
     print(f"\nCandidatas >= {MIN_SCORE}/100: {len(candidates)}")
     signals = []
+    watchlist = []
 
     for candidate in candidates:
         ticker = candidate["ticker"]
@@ -944,6 +974,119 @@ def main():
                 candidate["chollo"] = True
                 signals.append(candidate)
 
+
+            # CHOLLO A VIGILAR: todas las principales y solo una secundaria fallida.
+
+
+            primary = [
+
+
+                candidate["score"] >= MIN_SCORE,
+
+
+                distance_support <= MAX_SUPPORT_DISTANCE,
+
+
+                candidate["rsi"] <= MAX_RSI,
+
+
+                news_data.get("risk") in ("POSITIVO", "MIXTO / NEUTRO"),
+
+
+                candidate["reward_risk"] >= 2.0,
+
+
+            ]
+
+
+            secondary = [
+
+
+                candidate["rebound_confirmed"],
+
+
+                candidate["volume_confirmation"],
+
+
+                candidate["close_above_previous_high"],
+
+
+                market["ok"],
+
+
+                not earnings.get("blocked", False),
+
+
+            ]
+
+
+            failed_secondary = [
+
+
+                name for name, ok in zip(
+
+
+                    [
+
+
+                        "Rebote confirmado",
+
+
+                        "Volumen >= 1.15x",
+
+
+                        "Cierre > máximo de vela anterior",
+
+
+                        "S&P 500 favorable",
+
+
+                        "Sin resultados +/- 3 días",
+
+
+                    ], secondary
+
+
+                ) if not ok
+
+
+            ]
+
+
+            candidate["primary_ok"] = sum(primary)
+
+
+            candidate["secondary_ok"] = sum(secondary)
+
+
+            candidate["failed_secondary"] = failed_secondary
+
+
+
+            if (
+
+
+                not chollo
+
+
+                and all(primary)
+
+
+                and sum(secondary) == 4
+
+
+                and candidate["position"].get("shares", 0) >= 1
+
+
+            ):
+
+
+                candidate["watch"] = True
+
+
+                watchlist.append(candidate)
+
+
         except Exception as e:
             print(f"{display_ticker(ticker)}: error noticias ({e})")
             candidate["news_data"] = {
@@ -981,3 +1124,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    if watchlist:
+        for candidate in sorted(
+            watchlist,
+            key=lambda x: (x.get("score", 0), x.get("secondary_ok", 0)),
+            reverse=True,
+        ):
+            message = format_watch_alert(candidate)
+            send_telegram(message)
+            print("\n" + message + "\n")
