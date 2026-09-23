@@ -1,7 +1,5 @@
 import os
 import math
-import json
-import hashlib
 import requests
 import numpy as np
 import pandas as pd
@@ -14,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 # ============================================================
 # ESCÁNER DE CHOLLOS PARA DEGIRO
-# VERSIÓN DEFINITIVA
+# VERSIÓN COMPLETA
 # ============================================================
 
 
@@ -59,37 +57,27 @@ ETF_TICKERS = [
     "ZPDF.DE"
 ]
 
-
 TICKERS = STOCK_TICKERS + ETF_TICKERS
 
 
 ETF_INFO = {
 
     "SXR8.DE": {
-        "name":
-            "iShares Core S&P 500 UCITS ETF",
-        "isin":
-            "IE00B5BMR087",
-        "ticker":
-            "SXR8"
+        "name": "iShares Core S&P 500 UCITS ETF",
+        "isin": "IE00B5BMR087",
+        "ticker": "SXR8"
     },
 
     "SXRV.DE": {
-        "name":
-            "iShares NASDAQ 100 UCITS ETF",
-        "isin":
-            "IE00B53SZB19",
-        "ticker":
-            "SXRV"
+        "name": "iShares NASDAQ 100 UCITS ETF",
+        "isin": "IE00B53SZB19",
+        "ticker": "SXRV"
     },
 
     "ZPDF.DE": {
-        "name":
-            "SPDR S&P U.S. Financials Select Sector UCITS ETF",
-        "isin":
-            "IE00BWBXM500",
-        "ticker":
-            "ZPDF"
+        "name": "SPDR S&P U.S. Financials Select Sector UCITS ETF",
+        "isin": "IE00BWBXM500",
+        "ticker": "ZPDF"
     }
 }
 
@@ -155,7 +143,7 @@ COMPANY_NAMES = {
 
 
 # ============================================================
-# CONFIGURACIÓN TÉCNICA
+# CONFIGURACIÓN
 # ============================================================
 
 MIN_SCORE = 75
@@ -184,19 +172,14 @@ EARNINGS_BLACKOUT_DAYS = 3
 
 
 # ============================================================
-# NUEVOS FILTROS
+# FILTROS ADICIONALES
 # ============================================================
 
-# Volumen medio diario mínimo en dólares.
-# Evita acciones extremadamente ilíquidas.
 MIN_AVG_DOLLAR_VOLUME = 5_000_000
 
-# No comprar después de una subida diaria excesiva.
 MAX_DAILY_MOVE = 0.08
 
-# No comprar si la acción está demasiado alejada
-# del soporte aunque otros criterios sean buenos.
-MAX_DISTANCE_FROM_SUPPORT = 0.03
+SUPPORT_LOOKBACK = 20
 
 
 # ============================================================
@@ -234,7 +217,7 @@ TELEGRAM_CHAT_ID = os.getenv(
 
 
 # ============================================================
-# PALABRAS DE NOTICIAS
+# PALABRAS POSITIVAS
 # ============================================================
 
 POSITIVE_WORDS = [
@@ -289,6 +272,10 @@ POSITIVE_WORDS = [
     "crece"
 ]
 
+
+# ============================================================
+# PALABRAS NEGATIVAS
+# ============================================================
 
 NEGATIVE_WORDS = [
 
@@ -349,6 +336,55 @@ NEGATIVE_WORDS = [
     "bajista",
     "se desploma",
     "cae"
+]
+
+
+# ============================================================
+# PALABRAS DE RIESGO
+# ============================================================
+
+RISK_WORDS = [
+
+    "war",
+    "conflict",
+    "iran",
+    "israel",
+    "russia",
+    "ukraine",
+    "china",
+    "taiwan",
+    "sanctions",
+    "tariffs",
+    "fed",
+    "interest rates",
+    "inflation",
+    "recession",
+    "oil",
+    "crude",
+    "opec",
+    "hormuz",
+    "middle east",
+    "antitrust",
+    "regulation",
+    "regulatory",
+    "ban",
+    "export restrictions",
+    "investigation",
+    "lawsuit",
+
+    "guerra",
+    "conflicto",
+    "sanciones",
+    "aranceles",
+    "inflación",
+    "recesión",
+    "petróleo",
+    "crudo",
+    "estrecho de ormuz",
+    "regulación",
+    "prohibición",
+    "investigación",
+    "demanda"
 ]
 
 
@@ -537,7 +573,7 @@ def calculate_rsi(
 
 
 # ============================================================
-# DATOS DE MERCADO
+# DATOS
 # ============================================================
 
 def download_data(
@@ -645,7 +681,7 @@ def analyze_ticker(ticker):
 
     previous = df.iloc[-2]
 
-    price = safe_float(
+    price_value = safe_float(
         last["Close"]
     )
 
@@ -659,6 +695,10 @@ def analyze_ticker(ticker):
 
     low = safe_float(
         last["Low"]
+    )
+
+    previous_close = safe_float(
+        previous["Close"]
     )
 
     previous_high = safe_float(
@@ -688,7 +728,12 @@ def analyze_ticker(ticker):
     if any(
         pd.isna(x)
         for x in [
-            price,
+            price_value,
+            open_price,
+            high,
+            low,
+            previous_close,
+            previous_high,
             sma50,
             sma200,
             rsi_value,
@@ -708,42 +753,54 @@ def analyze_ticker(ticker):
 
     avg_dollar_volume = (
         avg_volume
-        * price
+        *
+        price_value
     )
 
     daily_move = (
-        (price - safe_float(
-            previous["Close"]
-        ))
-        /
-        safe_float(
-            previous["Close"]
+        (
+            price_value
+            -
+            previous_close
         )
+        /
+        previous_close
+        if previous_close > 0
+        else 0
     )
 
     # --------------------------------------------------------
     # SOPORTE
+    #
+    # MUY IMPORTANTE:
+    # Se utilizan las 20 sesiones ANTERIORES.
+    # La vela actual no modifica el soporte.
     # --------------------------------------------------------
 
-    support = safe_float(
+    previous_lows = (
         df["Low"]
-        .tail(20)
-        .min()
+        .iloc[
+            -(SUPPORT_LOOKBACK + 1):-1
+        ]
+    )
+
+    if len(previous_lows) < SUPPORT_LOOKBACK:
+
+        return None
+
+    support = safe_float(
+        previous_lows.min()
     )
 
     distance_support = (
-        (price - support)
+        (
+            price_value
+            -
+            support
+        )
         /
-        price
-        if price > 0
-        else math.inf
-    )
-
-    rebound_distance = (
-        (low - support)
-        /
-        support
-        if support > 0
+        price_value
+        if price_value > 0
         else math.inf
     )
 
@@ -751,8 +808,22 @@ def analyze_ticker(ticker):
     # REBOTE
     # --------------------------------------------------------
 
+    rebound_distance = (
+        (
+            low
+            -
+            support
+        )
+        /
+        support
+        if support > 0
+        else math.inf
+    )
+
     bullish_candle = (
-        price > open_price
+        price_value
+        >
+        open_price
     )
 
     support_reaction = (
@@ -766,7 +837,9 @@ def analyze_ticker(ticker):
     )
 
     close_above_previous_high = (
-        price > previous_high
+        price_value
+        >
+        previous_high
     )
 
     rebound_confirmed = (
@@ -784,7 +857,7 @@ def analyze_ticker(ticker):
 
     reasons = []
 
-    if price > sma200:
+    if price_value > sma200:
 
         score += 20
 
@@ -800,7 +873,7 @@ def analyze_ticker(ticker):
             "SMA50 > SMA200"
         )
 
-    if price > sma50:
+    if price_value > sma50:
 
         score += 10
 
@@ -827,6 +900,10 @@ def analyze_ticker(ticker):
     elif rsi_value <= 55:
 
         score += 8
+
+        reasons.append(
+            "RSI 45-55"
+        )
 
     if volume_ratio >= 1.5:
 
@@ -856,29 +933,50 @@ def analyze_ticker(ticker):
 
         score += 10
 
+        reasons.append(
+            "Precio <=6% soporte"
+        )
+
     # --------------------------------------------------------
     # STOP Y OBJETIVOS
     # --------------------------------------------------------
 
-    stop = support * 0.98
+    stop = (
+        support
+        *
+        0.98
+    )
 
     risk_per_share = (
-        price - stop
+        price_value
+        -
+        stop
     )
 
     if risk_per_share > 0:
 
         target1 = (
-            price
-            + 2 * risk_per_share
+            price_value
+            +
+            2
+            *
+            risk_per_share
         )
 
         target2 = (
-            price
-            + 3 * risk_per_share
+            price_value
+            +
+            3
+            *
+            risk_per_share
         )
 
-        reward_risk = 2.0
+        # R/R REAL DEL OBJETIVO 1.
+        reward_risk = (
+            target1
+            -
+            price_value
+        ) / risk_per_share
 
     else:
 
@@ -890,15 +988,20 @@ def analyze_ticker(ticker):
 
     return {
 
-        "ticker": ticker,
+        "ticker":
+            ticker,
 
-        "price": price,
+        "price":
+            price_value,
 
-        "score": score,
+        "score":
+            score,
 
-        "rsi": rsi_value,
+        "rsi":
+            rsi_value,
 
-        "volume_ratio": volume_ratio,
+        "volume_ratio":
+            volume_ratio,
 
         "avg_dollar_volume":
             avg_dollar_volume,
@@ -972,7 +1075,8 @@ def get_market_regime():
 
         return {
 
-            "ok": False,
+            "ok":
+                False,
 
             "status":
                 "SIN DATOS"
@@ -984,7 +1088,8 @@ def get_market_regime():
 
         return {
 
-            "ok": False,
+            "ok":
+                False,
 
             "status":
                 "SIN DATOS"
@@ -1002,16 +1107,18 @@ def get_market_regime():
         .iloc[-1]
     )
 
-    price = close.iloc[-1]
+    market_price = close.iloc[-1]
 
     ok = (
-        price > sma200
-        and sma50 > sma200
+        market_price > sma200
+        and
+        sma50 > sma200
     )
 
     return {
 
-        "ok": bool(ok),
+        "ok":
+            bool(ok),
 
         "status":
             "FAVORABLE"
@@ -1020,13 +1127,19 @@ def get_market_regime():
             "DESFAVORABLE",
 
         "price":
-            safe_float(price),
+            safe_float(
+                market_price
+            ),
 
         "sma50":
-            safe_float(sma50),
+            safe_float(
+                sma50
+            ),
 
         "sma200":
-            safe_float(sma200)
+            safe_float(
+                sma200
+            )
     }
 
 
@@ -1062,9 +1175,11 @@ def get_earnings_status(ticker):
             )
         )
 
-        if dates is None or len(
-            dates
-        ) == 0:
+        if (
+            dates is None
+            or
+            len(dates) == 0
+        ):
 
             return {
 
@@ -1108,13 +1223,17 @@ def get_earnings_status(ticker):
                 )
 
             diff = (
-                dt - now
+                dt
+                -
+                now
             ).total_seconds() / 86400
 
             if (
                 nearest is None
-                or abs(diff)
-                < nearest_abs
+                or
+                abs(diff)
+                <
+                nearest_abs
             ):
 
                 nearest = dt
@@ -1183,8 +1302,7 @@ def get_eurusd():
             return 1.0
 
         value = safe_float(
-            df["Close"]
-            .iloc[-1]
+            df["Close"].iloc[-1]
         )
 
         if value > 0:
@@ -1199,7 +1317,7 @@ def get_eurusd():
 
 
 # ============================================================
-# GESTIÓN DE POSICIÓN
+# POSICIÓN
 # ============================================================
 
 def calculate_position(
@@ -1211,18 +1329,22 @@ def calculate_position(
 
     max_risk_eur = (
         CAPITAL_EUR
-        * RISK_PER_TRADE
+        *
+        RISK_PER_TRADE
     )
 
     risk_per_share = (
-        entry - stop
+        entry
+        -
+        stop
     )
 
     if risk_per_share <= 0:
 
         return {
 
-            "shares": 0,
+            "shares":
+                0,
 
             "capital_used_eur":
                 0,
@@ -1246,22 +1368,26 @@ def calculate_position(
 
         entry_eur = (
             entry
-            / eurusd
+            /
+            eurusd
         )
 
         risk_eur_share = (
             risk_per_share
-            / eurusd
+            /
+            eurusd
         )
 
     shares_risk = math.floor(
         max_risk_eur
-        / risk_eur_share
+        /
+        risk_eur_share
     )
 
     shares_capital = math.floor(
         CAPITAL_EUR
-        / entry_eur
+        /
+        entry_eur
     )
 
     shares = max(
@@ -1274,12 +1400,14 @@ def calculate_position(
 
     capital_used = (
         shares
-        * entry_eur
+        *
+        entry_eur
     )
 
     risk_total = (
         shares
-        * risk_eur_share
+        *
+        risk_eur_share
     )
 
     return {
@@ -1320,7 +1448,8 @@ def get_news(
 
         query = (
             f'"{name}" '
-            + " ".join(
+            +
+            " ".join(
                 topics[:4]
             )
         )
@@ -1332,13 +1461,17 @@ def get_news(
     if language == "en":
 
         hl = "en-US"
+
         gl = "US"
+
         ceid = "US:en"
 
     else:
 
         hl = "es-ES"
+
         gl = "ES"
+
         ceid = "ES:es"
 
     url = (
@@ -1426,7 +1559,9 @@ def get_news(
                 dt = now
 
             if (
-                now - dt
+                now
+                -
+                dt
                 >
                 timedelta(
                     hours=NEWS_HOURS
@@ -1465,6 +1600,10 @@ def get_news(
         return []
 
 
+# ============================================================
+# TRADUCCIÓN
+# ============================================================
+
 def translate_to_spanish(
     text
 ):
@@ -1477,10 +1616,6 @@ def translate_to_spanish(
         "GOOGLE_TRANSLATE_API_KEY",
         ""
     )
-
-    # --------------------------------------------------------
-    # GOOGLE CLOUD
-    # --------------------------------------------------------
 
     if api_key:
 
@@ -1500,8 +1635,10 @@ def translate_to_spanish(
                 json={
                     "q":
                         text,
+
                     "target":
                         "es",
+
                     "format":
                         "text"
                 },
@@ -1531,10 +1668,6 @@ def translate_to_spanish(
         except Exception:
 
             pass
-
-    # --------------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------------
 
     try:
 
@@ -1582,7 +1715,8 @@ def translate_to_spanish(
                     part,
                     list
                 )
-                and len(part) > 0
+                and
+                len(part) > 0
             )
         )
 
@@ -1643,28 +1777,49 @@ def classify_news(
         )
 
         positive_hits = sum(
+
             1
+
             for word
             in POSITIVE_WORDS
+
             if word.lower()
             in text
         )
 
         negative_hits = sum(
+
             1
+
             for word
             in NEGATIVE_WORDS
+
             if word.lower()
             in text
         )
 
-        item["positive_hits"] = (
-            positive_hits
+        risk_hits = sum(
+
+            1
+
+            for word
+            in RISK_WORDS
+
+            if word.lower()
+            in text
         )
 
-        item["negative_hits"] = (
-            negative_hits
-        )
+        item[
+            "positive_hits"
+        ] = positive_hits
+
+        item[
+            "negative_hits"
+        ] = negative_hits
+
+        item[
+            "risk_hits"
+        ] = risk_hits
 
         all_news.append(
             item
@@ -1689,9 +1844,10 @@ def classify_news(
         for x in all_news
     )
 
-    # --------------------------------------------------------
-    # REGLA CONSERVADORA
-    # --------------------------------------------------------
+    risk_hits = sum(
+        x["risk_hits"]
+        for x in all_news
+    )
 
     if negative >= positive + 2:
 
@@ -1709,13 +1865,13 @@ def classify_news(
 
         risk = "POSITIVO"
 
+    elif risk_hits > 0:
+
+        risk = "MIXTO / RIESGO"
+
     else:
 
         risk = "MIXTO / NEUTRO"
-
-    # --------------------------------------------------------
-    # NOTICIA POSITIVA DESTACADA
-    # --------------------------------------------------------
 
     positive_news = [
 
@@ -1732,13 +1888,12 @@ def classify_news(
 
     if positive_news:
 
-        featured = (
-            positive_news[0]
-        )
+        featured = positive_news[0]
 
         if (
             featured["language"]
-            == "en"
+            ==
+            "en"
         ):
 
             featured[
@@ -1764,6 +1919,12 @@ def classify_news(
         "negative":
             negative,
 
+        "risk_hits":
+            risk_hits,
+
+        "count":
+            len(all_news),
+
         "items":
             all_news,
 
@@ -1782,7 +1943,8 @@ def send_telegram(
 
     if (
         not TELEGRAM_BOT_TOKEN
-        or not TELEGRAM_CHAT_ID
+        or
+        not TELEGRAM_CHAT_ID
     ):
 
         print(
@@ -1790,6 +1952,16 @@ def send_telegram(
         )
 
         return False
+
+    # Telegram admite hasta 4096 caracteres.
+    # Dejamos margen para evitar errores.
+    if len(message) > 3900:
+
+        message = (
+            message[:3850]
+            +
+            "\n\n[Mensaje truncado]"
+        )
 
     url = (
         "https://api.telegram.org/"
@@ -1801,6 +1973,7 @@ def send_telegram(
         response = requests.post(
             url,
             json={
+
                 "chat_id":
                     TELEGRAM_CHAT_ID,
 
@@ -1830,13 +2003,15 @@ def send_telegram(
 # FORMATEAR DINERO
 # ============================================================
 
-def money(value):
+def money(
+    value
+):
 
-    if value is None:
-
-        return "N/D"
-
-    if pd.isna(value):
+    if (
+        value is None
+        or
+        pd.isna(value)
+    ):
 
         return "N/D"
 
@@ -1845,17 +2020,20 @@ def money(value):
         .replace(",", "X")
         .replace(".", ",")
         .replace("X", ".")
-        + " €"
+        +
+        " €"
     )
 
 
-def price(value):
+def price(
+    value
+):
 
-    if value is None:
-
-        return "N/D"
-
-    if pd.isna(value):
+    if (
+        value is None
+        or
+        pd.isna(value)
+    ):
 
         return "N/D"
 
@@ -1885,7 +2063,8 @@ def diagnostic_report(
 
     print(
         "\n"
-        + "=" * 70
+        +
+        "=" * 70
     )
 
     print(
@@ -1919,6 +2098,21 @@ def diagnostic_report(
     )
 
     print(
+        f"Volumen: "
+        f"{candidate['volume_ratio']:.2f}x"
+    )
+
+    print(
+        f"Liquidez media: "
+        f"{money(candidate['avg_dollar_volume'])}"
+    )
+
+    print(
+        f"Movimiento diario: "
+        f"{candidate['daily_move'] * 100:.2f}%"
+    )
+
+    print(
         f"Noticias: "
         f"{candidate['news']['risk']}"
     )
@@ -1928,8 +2122,6 @@ def diagnostic_report(
         f"{candidate['reward_risk']:.1f}:1"
     )
 
-    print()
-
     p_ok = sum(
         primary.values()
     )
@@ -1937,6 +2129,8 @@ def diagnostic_report(
     s_ok = sum(
         secondary.values()
     )
+
+    print()
 
     print(
         f"🟢 PRINCIPALES: "
@@ -1970,7 +2164,8 @@ def diagnostic_report(
 
     if (
         p_ok == 5
-        and s_ok == 5
+        and
+        s_ok == 5
     ):
 
         print(
@@ -1980,7 +2175,8 @@ def diagnostic_report(
 
     elif (
         p_ok == 5
-        and s_ok == 4
+        and
+        s_ok == 4
     ):
 
         print(
@@ -1995,40 +2191,9 @@ def diagnostic_report(
             "NO ENTRA"
         )
 
-    # --------------------------------------------------------
-    # DINERO
-    # --------------------------------------------------------
-
-    position = candidate.get(
-        "position"
-    )
-
-    if position:
-
-        print()
-
-        print(
-            "💰 GESTIÓN DE DINERO"
-        )
-
-        print(
-            f"   Acciones: "
-            f"{position['shares']}"
-        )
-
-        print(
-            f"   Capital: "
-            f"{money(position['capital_used_eur'])}"
-        )
-
-        print(
-            f"   Riesgo máximo: "
-            f"{money(position['risk_eur'])}"
-        )
-
 
 # ============================================================
-# MENSAJE DE UNA OPERACIÓN
+# MENSAJE DE OPERACIÓN
 # ============================================================
 
 def build_signal_message(
@@ -2090,15 +2255,26 @@ def build_signal_message(
 🔴 PÉRDIDA MÁXIMA ESTIMADA:
 {money(position['risk_eur'])}
 
-📰 Noticias:
-{news['risk']}
+📰 Noticias analizadas: {news['count']}
+📰 Impacto: {news['risk']}
 
 🌎 Mercado S&P 500:
 {candidate['market_status']}
 
 📅 Resultados:
 {candidate['earnings_status']}
-"""
+""".strip()
+
+    # --------------------------------------------------------
+    # REGLA DE SEGURIDAD
+    # --------------------------------------------------------
+
+    if news["risk"] == "NEGATIVO":
+
+        message += (
+            "\n\n🚨 SEÑAL FINAL: "
+            "PRECAUCIÓN — esperar"
+        )
 
     featured = news.get(
         "featured"
@@ -2107,7 +2283,7 @@ def build_signal_message(
     if featured:
 
         message += (
-            "\n🇪🇸 NOTICIA POSITIVA DESTACADA\n"
+            "\n\n🇪🇸 NOTICIA POSITIVA DESTACADA\n"
             f"{featured['translated_title']}\n"
             f"Fuente: {featured['source']}\n"
         )
@@ -2124,6 +2300,201 @@ def build_signal_message(
 
 
 # ============================================================
+# DIAGNÓSTICO PARA TELEGRAM
+# ============================================================
+
+def build_diagnostic_message(
+    candidate
+):
+
+    primary = candidate[
+        "primary_checks"
+    ]
+
+    secondary = candidate[
+        "secondary_checks"
+    ]
+
+    p_ok = sum(
+        primary.values()
+    )
+
+    s_ok = sum(
+        secondary.values()
+    )
+
+    failed_primary = [
+
+        name
+
+        for name, ok
+        in primary.items()
+
+        if not ok
+    ]
+
+    failed_secondary = [
+
+        name
+
+        for name, ok
+        in secondary.items()
+
+        if not ok
+    ]
+
+    if (
+        p_ok == 5
+        and
+        s_ok == 5
+    ):
+
+        result = (
+            "💎 CHOLLO CONFIRMADO"
+        )
+
+    elif (
+        p_ok == 5
+        and
+        s_ok == 4
+    ):
+
+        result = (
+            "🟡 CANDIDATA A VIGILAR"
+        )
+
+    else:
+
+        result = (
+            "⚪ NO ENTRA"
+        )
+
+    message = f"""
+🔎 {display_ticker(candidate['ticker'])} — {display_name(candidate['ticker'])}
+
+💵 Precio: {price(candidate['price'])}
+📊 Score: {candidate['score']}/100
+📉 RSI: {candidate['rsi']:.1f}
+📍 Soporte: {price(candidate['support'])}
+📐 Distancia soporte: {candidate['distance_support'] * 100:.2f}%
+📈 Volumen: {candidate['volume_ratio']:.2f}x
+⚖️ R/R: {candidate['reward_risk']:.1f}:1
+📰 Noticias analizadas: {candidate['news']['count']}
+📰 Impacto: {candidate['news']['risk']}
+
+🟢 PRINCIPALES: {p_ok}/5
+""".strip()
+
+    for name, ok in primary.items():
+
+        message += (
+            f"\n"
+            f"{'✅' if ok else '❌'} "
+            f"{name}"
+        )
+
+    message += (
+        f"\n\n🟡 SECUNDARIOS: "
+        f"{s_ok}/5"
+    )
+
+    for name, ok in secondary.items():
+
+        message += (
+            f"\n"
+            f"{'✅' if ok else '❌'} "
+            f"{name}"
+        )
+
+    message += (
+        f"\n\n{result}"
+    )
+
+    if failed_primary:
+
+        message += (
+            "\n\n❌ PRINCIPALES QUE FALLA:"
+        )
+
+        for item in failed_primary:
+
+            message += (
+                f"\n• {item}"
+            )
+
+    if failed_secondary:
+
+        message += (
+            "\n\n⚠️ SECUNDARIOS QUE FALLA:"
+        )
+
+        for item in failed_secondary:
+
+            message += (
+                f"\n• {item}"
+            )
+
+    if candidate["news"]["risk"] == "NEGATIVO":
+
+        message += (
+            "\n\n🚨 SEÑAL FINAL: "
+            "PRECAUCIÓN — esperar"
+        )
+
+    return message.strip()
+
+
+# ============================================================
+# RESUMEN
+# ============================================================
+
+def build_summary(
+    confirmed,
+    watchlist,
+    rejected,
+    market
+):
+
+    return f"""
+📊 ESCÁNER DE CHOLLOS PARA DEGIRO
+
+💎 CHOLLOS CONFIRMADOS:
+{len(confirmed)}
+
+🟡 CANDIDATAS A VIGILAR:
+{len(watchlist)}
+
+⚪ NO ENTRAN:
+{len(rejected)}
+
+💰 Capital:
+{money(CAPITAL_EUR)}
+
+🔴 Riesgo máximo:
+{money(CAPITAL_EUR * RISK_PER_TRADE)}
+
+🌎 S&P 500:
+{market['status']}
+
+Filtros principales:
+• Score >=75
+• RSI <=45
+• Precio <=3% soporte
+• Noticias no negativas
+• R/R >=2:1
+
+Filtros secundarios:
+• Rebote confirmado
+• Volumen >=1.15x
+• Cierre > máximo vela anterior
+• S&P 500 favorable
+• Sin resultados +/-3 días
+
+📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}
+""".strip()
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -2131,7 +2502,8 @@ def main():
 
     print(
         "\n"
-        + "=" * 70
+        +
+        "=" * 70
     )
 
     print(
@@ -2206,9 +2578,19 @@ def main():
 
                 continue
 
-            # Solo hacemos diagnóstico
-            # detallado a partir de score 75.
-            if result["score"] < MIN_SCORE:
+            # ------------------------------------------------
+            # IMPORTANTE
+            #
+            # Solo los valores con Score >=75 pasan a
+            # noticias/resultados. Así evitamos hacer decenas
+            # de consultas externas innecesarias.
+            # ------------------------------------------------
+
+            if (
+                result["score"]
+                <
+                MIN_SCORE
+            ):
 
                 continue
 
@@ -2282,7 +2664,8 @@ def main():
                     news["risk"]
                     in (
                         "POSITIVO",
-                        "MIXTO / NEUTRO"
+                        "MIXTO / NEUTRO",
+                        "MIXTO / RIESGO"
                     ),
 
                 "R/R >= 2:1":
@@ -2334,9 +2717,46 @@ def main():
                 "earnings_status"
             ] = earnings["status"]
 
+            # ------------------------------------------------
+            # FILTROS ADICIONALES INFORMATIVOS
+            # ------------------------------------------------
+
             result[
-                "reward_risk"
-            ] = result["reward_risk"]
+                "liquidity_ok"
+            ] = (
+                result[
+                    "avg_dollar_volume"
+                ]
+                >=
+                MIN_AVG_DOLLAR_VOLUME
+            )
+
+            result[
+                "daily_move_ok"
+            ] = (
+                abs(
+                    result[
+                        "daily_move"
+                    ]
+                )
+                <=
+                MAX_DAILY_MOVE
+            )
+
+            result[
+                "extra_checks"
+            ] = {
+
+                "Liquidez media >= 5M":
+                    result[
+                        "liquidity_ok"
+                    ],
+
+                "Movimiento diario <= 8%":
+                    result[
+                        "daily_move_ok"
+                    ]
+            }
 
             # ------------------------------------------------
             # DIAGNÓSTICO
@@ -2383,16 +2803,32 @@ def main():
 
         shares = candidate[
             "position"
-        ]["shares"]
+        ][
+            "shares"
+        ]
+
+        news_negative = (
+            candidate[
+                "news"
+            ][
+                "risk"
+            ]
+            ==
+            "NEGATIVO"
+        )
 
         # ----------------------------------------------------
-        # CHOLLO CONFIRMADO
+        # CONFIRMADO
         # ----------------------------------------------------
 
         if (
             primary_ok
-            and secondary_count == 5
-            and shares >= 1
+            and
+            secondary_count == 5
+            and
+            shares >= 1
+            and
+            not news_negative
         ):
 
             confirmed.append(
@@ -2400,19 +2836,26 @@ def main():
             )
 
         # ----------------------------------------------------
-        # CHOLLO A VIGILAR
-        # Exactamente un secundario falla.
+        # VIGILAR
         # ----------------------------------------------------
 
         elif (
             primary_ok
-            and secondary_count == 4
-            and shares >= 1
+            and
+            secondary_count == 4
+            and
+            shares >= 1
+            and
+            not news_negative
         ):
 
             watchlist.append(
                 candidate
             )
+
+        # ----------------------------------------------------
+        # NO ENTRA
+        # ----------------------------------------------------
 
         else:
 
@@ -2421,12 +2864,13 @@ def main():
             )
 
     # ========================================================
-    # RESUMEN
+    # RESULTADO FINAL
     # ========================================================
 
     print(
         "\n"
-        + "=" * 70
+        +
+        "=" * 70
     )
 
     print(
@@ -2453,32 +2897,59 @@ def main():
     )
 
     # ========================================================
-    # CONFIRMADOS
+    # TELEGRAM
     # ========================================================
 
     telegram_messages = []
 
+    # --------------------------------------------------------
+    # RESUMEN
+    # --------------------------------------------------------
+
+    telegram_messages.append(
+        build_summary(
+            confirmed,
+            watchlist,
+            rejected,
+            market
+        )
+    )
+
+    # --------------------------------------------------------
+    # CONFIRMADOS
+    # --------------------------------------------------------
+
     for candidate in confirmed:
 
-        message = build_signal_message(
-            candidate,
-            True
+        message = (
+            build_signal_message(
+                candidate,
+                True
+            )
         )
 
         print(
             "\n"
-            + message
+            +
+            message
         )
 
         telegram_messages.append(
             message
         )
 
-    # ========================================================
+    # --------------------------------------------------------
     # VIGILANCIA
-    # ========================================================
+    # --------------------------------------------------------
 
     for candidate in watchlist:
+
+        message = (
+            build_signal_message(
+                candidate,
+                False
+            )
+        )
 
         failed_secondary = [
 
@@ -2492,14 +2963,10 @@ def main():
             if not ok
         ]
 
-        message = build_signal_message(
-            candidate,
-            False
-        )
-
         message += (
             "\n\n⚠️ SECUNDARIO QUE FALLA:\n"
-            + "\n".join(
+            +
+            "\n".join(
                 "❌ " + x
                 for x
                 in failed_secondary
@@ -2508,198 +2975,56 @@ def main():
 
         print(
             "\n"
-            + message
+            +
+            message
         )
 
         telegram_messages.append(
             message
         )
 
-    # ========================================================
-    # DIAGNÓSTICO FINAL POR TICKER
-    # ========================================================
-
-    print(
-        "\n"
-        + "=" * 70
-    )
-
-    print(
-        "🔎 RESUMEN DE FILTROS"
-    )
-
-    print(
-        "=" * 70
-    )
-
-    for candidate in candidates:
-
-        p = candidate[
-            "primary_checks"
-        ]
-
-        s = candidate[
-            "secondary_checks"
-        ]
-
-        primary_ok = sum(
-            p.values()
-        )
-
-        secondary_ok = sum(
-            s.values()
-        )
-
-        failed_primary = [
-
-            name
-
-            for name, ok
-            in p.items()
-
-            if not ok
-        ]
-
-        failed_secondary = [
-
-            name
-
-            for name, ok
-            in s.items()
-
-            if not ok
-        ]
-
-        print(
-            f"\n{display_ticker(candidate['ticker'])} "
-            f"- {display_name(candidate['ticker'])}"
-        )
-
-        print(
-            f"   Principales: "
-            f"{primary_ok}/5"
-        )
-
-        if failed_primary:
-
-            for item in failed_primary:
-
-                print(
-                    f"      ❌ {item}"
-                )
-
-        else:
-
-            print(
-                "      ✅ Todas"
-            )
-
-        print(
-            f"   Secundarios: "
-            f"{secondary_ok}/5"
-        )
-
-        if failed_secondary:
-
-            for item in failed_secondary:
-
-                print(
-                    f"      ❌ {item}"
-                )
-
-        else:
-
-            print(
-                "      ✅ Todos"
-            )
-
-        if (
-            primary_ok == 5
-            and secondary_ok == 5
-        ):
-
-            print(
-                "   💎 CHOLLO CONFIRMADO"
-            )
-
-        elif (
-            primary_ok == 5
-            and secondary_ok == 4
-        ):
-
-            print(
-                "   🟡 CHOLLO A VIGILAR"
-            )
-
-        else:
-
-            print(
-                "   ⚪ NO ENTRA"
-            )
-
-    # ========================================================
-    # SI NO HAY CONFIRMADOS
-    # ========================================================
-
-    if not confirmed:
-
-        print(
-            "\n"
-            "No hay oportunidades que "
-            "cumplan TODOS los filtros "
-            "del CHOLLO CONFIRMADO."
-        )
-
-    # ========================================================
-    # MENSAJE RESUMEN TELEGRAM
-    # ========================================================
-
-    summary = f"""
-📊 ESCÁNER DE CHOLLOS PARA DEGIRO
-
-💎 CHOLLOS CONFIRMADOS:
-{len(confirmed)}
-
-🟡 CANDIDATAS A VIGILAR:
-{len(watchlist)}
-
-⚪ NO ENTRAN:
-{len(rejected)}
-
-💰 Capital:
-{money(CAPITAL_EUR)}
-
-🔴 Riesgo máximo:
-{money(CAPITAL_EUR * RISK_PER_TRADE)}
-
-🌎 S&P 500:
-{market['status']}
-
-Filtros principales:
-• Score >=75
-• RSI <=45
-• Precio <=3% soporte
-• Noticias no negativas
-• R/R >=2:1
-
-Filtros secundarios:
-• Rebote confirmado
-• Volumen >=1.15x
-• Cierre > máximo vela anterior
-• S&P 500 favorable
-• Sin resultados +/-3 días
-
-📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}
-""".strip()
-
-    telegram_messages.insert(
-        0,
-        summary
-    )
-
     # --------------------------------------------------------
-    # ENVIAR TELEGRAM
+    # DIAGNÓSTICO DETALLADO
     # --------------------------------------------------------
+
+    if candidates:
+
+        telegram_messages.append(
+            "🔎 DIAGNÓSTICO DETALLADO\n\n"
+            "Cada instrumento que alcanzó "
+            "Score >=75 aparece abajo con "
+            "todos sus filtros."
+        )
+
+        for candidate in candidates:
+
+            detail = (
+                build_diagnostic_message(
+                    candidate
+                )
+            )
+
+            print(
+                "\n"
+                +
+                detail
+            )
+
+            telegram_messages.append(
+                detail
+            )
+
+    else:
+
+        telegram_messages.append(
+            "🔎 DIAGNÓSTICO DETALLADO\n\n"
+            "Ningún instrumento alcanzó "
+            "Score >=75 en esta ejecución."
+        )
+
+    # ========================================================
+    # ENVÍO
+    # ========================================================
 
     for message in telegram_messages:
 
@@ -2709,7 +3034,8 @@ Filtros secundarios:
 
     print(
         "\n"
-        + "=" * 70
+        +
+        "=" * 70
     )
 
     print(
