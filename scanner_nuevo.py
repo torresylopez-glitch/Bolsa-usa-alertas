@@ -1095,6 +1095,18 @@ def main():
                 "summary": "No se pudo completar el análisis de noticias."
             }
 
+    # Mostrar CHOLLO A VIGILAR antes de cualquier return.
+    if watchlist:
+        for candidate in sorted(
+            watchlist,
+            key=lambda x: (x.get("score", 0), x.get("secondary_ok", 0)),
+            reverse=True,
+        ):
+            message = format_watch_alert(candidate)
+            send_telegram(message)
+            print("\n" + message + "\n")
+            print("========================================")
+
     if not signals:
         message = (
             "📊 ESCÁNER DE CHOLLOS PARA DEGIRO\n\n"
