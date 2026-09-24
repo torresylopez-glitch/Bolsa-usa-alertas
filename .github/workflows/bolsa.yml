@@ -2,13 +2,9 @@ name: Escaner Bolsa Telegram
 
 on:
   schedule:
-    # Cada 30 minutos durante la sesión
     - cron: "*/30 14-19 * * 1-5"
-
   workflow_dispatch:
 
-# Evita que dos ejecuciones se pisen
-# y permite que el workflow guarde el estado.
 concurrency:
   group: scanner-bolsa
   cancel-in-progress: false
@@ -22,36 +18,20 @@ jobs:
 
     steps:
 
-      # ------------------------------------------
-      # DESCARGAR EL REPOSITORIO
-      # ------------------------------------------
-
       - name: Descargar repositorio
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # ------------------------------------------
-      # PYTHON
-      # ------------------------------------------
 
       - name: Preparar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ------------------------------------------
-      # DEPENDENCIAS
-      # ------------------------------------------
-
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      # ------------------------------------------
-      # EJECUTAR ESCÁNER
-      # ------------------------------------------
 
       - name: Ejecutar escáner
         env:
@@ -60,20 +40,20 @@ jobs:
         run: |
           python scanner.py
 
-      # ------------------------------------------
-      # GUARDAR ESTADO
-      # ------------------------------------------
-
       - name: Guardar estado de alertas
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add alert_state.json
+          if [ -f alert_state.json ]; then
+            git add alert_state.json
 
-          if git diff --cached --quiet; then
-            echo "No hay cambios en el estado."
+            if git diff --cached --quiet; then
+              echo "No hay cambios en el estado."
+            else
+              git commit -m "Actualizar estado de alertas"
+              git push
+            fi
           else
-            git commit -m "Actualizar estado de alertas"
-            git push
+            echo "No existe alert_state.json. No hay estado que guardar."
           fi
