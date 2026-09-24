@@ -2,38 +2,50 @@ import os
 import json
 import math
 from pathlib import Path
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
 
-
 # ============================================================
-# CONFIGURACIÓN
+# ESCÁNER DE PATRONES HISTÓRICOS — 49 VALORES
+# Aprende de movimientos >= +10% desde 01/01/2025
+# y busca analogías actuales.
 # ============================================================
 
 START_DATE = "2025-01-01"
 
-WIN_THRESHOLD = 0.10          # +10%
-FORWARD_DAYS = 20              # ventana para comprobar subida
-EVENT_SEPARATION_DAYS = 20     # evita contar el mismo movimiento varias veces
+WIN_THRESHOLD = 0.10
+FORWARD_DAYS = 20
+EVENT_SEPARATION_DAYS = 20
 
+# ------------------------------------------------------------
+# SENSIBILIDAD DEL MODELO
+# ------------------------------------------------------------
+
+# Número mínimo de casos históricos parecidos.
 MIN_ANALOGS = 5
+
+# Similitud mínima con los casos ganadores históricos.
 MIN_SIMILARITY = 0.62
 
+# Máximo de oportunidades que puede enviar en un día.
 MAX_DAILY_ALERTS = 4
+
+# Máximo de analogías utilizadas para calcular la previsión.
 MAX_ANALOGS_FOR_FORECAST = 30
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# ------------------------------------------------------------
+# TELEGRAM
+# ------------------------------------------------------------
 
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# Estado diario para no repetir oportunidades.
 STATE_FILE = Path("alert_state.json")
-
-# Zona horaria para determinar qué significa "hoy"
-LOCAL_TZ = ZoneInfo("Europe/Madrid")
 
 
 # ============================================================
@@ -41,48 +53,102 @@ LOCAL_TZ = ZoneInfo("Europe/Madrid")
 # ============================================================
 
 TICKERS = [
-    # USA
-    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO",
-    "TSLA", "AMD", "NFLX", "JPM", "V", "MA", "COST", "WMT",
-    "LLY", "XOM", "ORCL", "CRM", "PLTR", "QCOM", "MU", "INTC",
-    "AMAT", "UBER", "PANW", "ADBE",
 
-    # ESPAÑA
-    "IBE.MC", "BBVA.MC", "SAN.MC", "ITX.MC", "REP.MC", "TEF.MC",
+    # ---------------- USA ----------------
 
-    # ALEMANIA
-    "SAP.DE", "SIE.DE", "ALV.DE", "DTE.DE",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "AVGO",
+    "TSLA",
+    "AMD",
+    "NFLX",
+    "JPM",
+    "V",
+    "MA",
+    "COST",
+    "WMT",
+    "LLY",
+    "XOM",
+    "ORCL",
+    "CRM",
+    "PLTR",
+    "QCOM",
+    "MU",
+    "INTC",
+    "AMAT",
+    "UBER",
+    "PANW",
+    "ADBE",
 
-    # FRANCIA
-    "AIR.PA", "SU.PA", "MC.PA", "TTE.PA",
+    # ---------------- ESPAÑA ----------------
 
-    # PAÍSES BAJOS
-    "ASML.AS", "ADYEN.AS",
+    "IBE.MC",
+    "BBVA.MC",
+    "SAN.MC",
+    "ITX.MC",
+    "REP.MC",
+    "TEF.MC",
 
-    # ITALIA
-    "RACE.MI", "ENEL.MI", "ISP.MI",
+    # ---------------- ALEMANIA ----------------
 
-    # ETFs
-    "SXR8.DE", "SXRV.DE", "ZPDF.DE",
+    "SAP.DE",
+    "SIE.DE",
+    "ALV.DE",
+    "DTE.DE",
+
+    # ---------------- FRANCIA ----------------
+
+    "AIR.PA",
+    "SU.PA",
+    "MC.PA",
+    "TTE.PA",
+
+    # ---------------- PAÍSES BAJOS ----------------
+
+    "ASML.AS",
+    "ADYEN.AS",
+
+    # ---------------- ITALIA ----------------
+
+    "RACE.MI",
+    "ENEL.MI",
+    "ISP.MI",
+
+    # ---------------- ETFs ----------------
+
+    "SXR8.DE",
+    "SXRV.DE",
+    "ZPDF.DE",
 ]
 
 
-COMPANY_NAMES = {
+# ============================================================
+# NOMBRES
+# ============================================================
+
+NAMES = {
+
     "AAPL": "Apple",
     "MSFT": "Microsoft",
     "NVDA": "NVIDIA",
     "AMZN": "Amazon",
-    "GOOGL": "Alphabet Google",
-    "META": "Meta Platforms",
+    "GOOGL": "Alphabet",
+    "META": "Meta",
     "AVGO": "Broadcom",
     "TSLA": "Tesla",
     "AMD": "AMD",
     "NFLX": "Netflix",
+
     "JPM": "JPMorgan",
     "V": "Visa",
     "MA": "Mastercard",
     "COST": "Costco",
     "WMT": "Walmart",
+
     "LLY": "Eli Lilly",
     "XOM": "Exxon Mobil",
     "ORCL": "Oracle",
@@ -120,13 +186,17 @@ COMPANY_NAMES = {
     "ENEL.MI": "Enel",
     "ISP.MI": "Intesa Sanpaolo",
 
-    "SXR8.DE": "iShares Core S&P 500 UCITS ETF",
-    "SXRV.DE": "iShares NASDAQ 100 UCITS ETF",
-    "ZPDF.DE": "SPDR S&P U.S. Financials Select Sector UCITS ETF",
+    "SXR8.DE": "iShares Core S&P 500",
+    "SXRV.DE": "iShares NASDAQ 100",
+    "ZPDF.DE": "SPDR U.S. Financials",
 }
 
 
-MARKET_TICKERS = [
+# ============================================================
+# ÍNDICES DE MERCADO
+# ============================================================
+
+MARKETS = [
     "^GSPC",
     "^IXIC",
     "^DJI",
@@ -138,221 +208,164 @@ MARKET_TICKERS = [
 # UTILIDADES
 # ============================================================
 
-def safe_float(value):
-    try:
-        value = float(value)
-        if math.isfinite(value):
-            return value
-    except Exception:
-        pass
-    return np.nan
+def flatten_columns(df):
 
+    if isinstance(df.columns, pd.MultiIndex):
 
-def fmt_price(value):
-    return f"{value:.3f}"
+        df.columns = [
+            c[0] if isinstance(c, tuple) else c
+            for c in df.columns
+        ]
 
+    df.columns = [str(c) for c in df.columns]
 
-def fmt_percent(value):
-    return f"{value * 100:.1f}%"
-
-
-# ============================================================
-# ESTADO DE ALERTAS
-# ============================================================
-
-def load_state():
-    """
-    Lee el estado persistente.
-
-    Formato:
-
-    {
-        "date": "2026-09-24",
-        "sent_tickers": ["BBVA.MC", "ISP.MI"],
-        "sent_at": {
-            "BBVA.MC": "...",
-            "ISP.MI": "..."
-        }
-    }
-    """
-
-    if not STATE_FILE.exists():
-        return {
-            "date": "",
-            "sent_tickers": [],
-            "sent_at": {}
-        }
-
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            state = json.load(f)
-
-        if not isinstance(state, dict):
-            raise ValueError("Estado inválido")
-
-    except Exception:
-        return {
-            "date": "",
-            "sent_tickers": [],
-            "sent_at": {}
-        }
-
-    state.setdefault("date", "")
-    state.setdefault("sent_tickers", [])
-    state.setdefault("sent_at", {})
-
-    return state
-
-
-def save_state(state):
-    """
-    Guarda el estado de forma segura.
-    """
-
-    temp_file = Path("alert_state.tmp")
-
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(
-            state,
-            f,
-            indent=2,
-            ensure_ascii=False
-        )
-
-    temp_file.replace(STATE_FILE)
-
-
-def prepare_today_state(state):
-    """
-    Si ha cambiado el día, se eliminan los tickers enviados
-    del día anterior.
-
-    El histórico permanece en el repositorio.
-    """
-
-    today = datetime.now(LOCAL_TZ).date().isoformat()
-
-    if state.get("date") != today:
-        state["date"] = today
-        state["sent_tickers"] = []
-        state["sent_at"] = {}
-
-    return state
-
-
-def ticker_already_sent_today(state, ticker):
-    return ticker in set(state.get("sent_tickers", []))
-
-
-def register_sent_ticker(state, ticker):
-    if ticker not in state["sent_tickers"]:
-        state["sent_tickers"].append(ticker)
-
-    state["sent_at"][ticker] = datetime.now(
-        LOCAL_TZ
-    ).isoformat()
+    return df
 
 
 # ============================================================
 # DESCARGA DE DATOS
 # ============================================================
 
-def download_ticker(ticker):
+def download_daily(ticker, start=START_DATE):
+
     try:
+
+        # End es exclusivo en yfinance.
+        # De esta forma utilizamos el último cierre disponible.
+        end = datetime.now(timezone.utc).date().isoformat()
+
         df = yf.download(
             ticker,
-            start=START_DATE,
-            end=datetime.now(LOCAL_TZ).date().isoformat(),
+            start=start,
+            end=end,
             interval="1d",
             auto_adjust=True,
             progress=False,
-            threads=False
+            threads=False,
         )
 
         if df is None or df.empty:
             return None
 
-        # yfinance puede devolver MultiIndex
-        if isinstance(df.columns, pd.MultiIndex):
-            try:
-                df.columns = df.columns.get_level_values(0)
-            except Exception:
-                return None
+        df = flatten_columns(df)
 
-        required = [
+        needed = [
             "Open",
             "High",
             "Low",
             "Close",
-            "Volume"
+            "Volume",
         ]
 
-        for col in required:
-            if col not in df.columns:
-                return None
-
-        df = df[required].copy()
-
-        for col in required:
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce"
-            )
-
-        df.dropna(subset=["Close", "High", "Low"], inplace=True)
-
-        if len(df) < 210:
+        if not all(c in df.columns for c in needed):
             return None
+
+        df = df[needed].copy()
+
+        df = df.dropna(
+            subset=[
+                "High",
+                "Low",
+                "Close",
+            ]
+        )
+
+        df = df[
+            ~df.index.duplicated(
+                keep="last"
+            )
+        ]
 
         return df
 
     except Exception as e:
-        print(f"[ERROR DATOS] {ticker}: {e}")
+
+        print(
+            f"[WARN] {ticker}: {e}"
+        )
+
         return None
 
 
 # ============================================================
-# INDICADORES
+# RSI
 # ============================================================
 
-def calculate_rsi(series, period=14):
+def rsi(series, period=14):
+
     delta = series.diff()
 
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    gain = delta.clip(
+        lower=0
+    )
 
-    avg_gain = gain.rolling(
-        period,
-        min_periods=period
+    loss = -delta.clip(
+        upper=0
+    )
+
+    avg_gain = gain.ewm(
+        alpha=1 / period,
+        min_periods=period,
+        adjust=False,
     ).mean()
 
-    avg_loss = loss.rolling(
-        period,
-        min_periods=period
+    avg_loss = loss.ewm(
+        alpha=1 / period,
+        min_periods=period,
+        adjust=False,
     ).mean()
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rs = (
+        avg_gain
+        /
+        avg_loss.replace(
+            0,
+            np.nan
+        )
+    )
 
-    rsi = 100 - (100 / (1 + rs))
+    result = (
+        100
+        -
+        (
+            100
+            /
+            (1 + rs)
+        )
+    )
 
-    return rsi
+    return result
 
 
-def calculate_atr(df, period=14):
+# ============================================================
+# ATR
+# ============================================================
+
+def atr(df, period=14):
+
     prev_close = df["Close"].shift(1)
 
-    tr1 = df["High"] - df["Low"]
-    tr2 = (df["High"] - prev_close).abs()
-    tr3 = (df["Low"] - prev_close).abs()
+    tr = pd.concat(
+        [
+            df["High"] - df["Low"],
 
-    true_range = pd.concat(
-        [tr1, tr2, tr3],
-        axis=1
+            (
+                df["High"]
+                -
+                prev_close
+            ).abs(),
+
+            (
+                df["Low"]
+                -
+                prev_close
+            ).abs(),
+        ],
+        axis=1,
     ).max(axis=1)
 
-    return true_range.rolling(
-        period,
-        min_periods=period
+    return tr.rolling(
+        period
     ).mean()
 
 
@@ -360,356 +373,628 @@ def calculate_atr(df, period=14):
 # FEATURES
 # ============================================================
 
-def build_features(df):
+def add_features(df):
+
     x = df.copy()
 
     close = x["Close"]
-    high = x["High"]
-    low = x["Low"]
-    volume = x["Volume"]
+
+    volume = (
+        x["Volume"]
+        .replace(
+            0,
+            np.nan
+        )
+    )
 
     # Medias
-    x["SMA20"] = close.rolling(20).mean()
-    x["SMA50"] = close.rolling(50).mean()
-    x["SMA100"] = close.rolling(100).mean()
-    x["SMA200"] = close.rolling(200).mean()
+    x["sma20"] = (
+        close.rolling(20).mean()
+    )
+
+    x["sma50"] = (
+        close.rolling(50).mean()
+    )
+
+    x["sma100"] = (
+        close.rolling(100).mean()
+    )
+
+    x["sma200"] = (
+        close.rolling(200).mean()
+    )
 
     # RSI
-    x["RSI14"] = calculate_rsi(close)
+    x["rsi14"] = rsi(close)
 
     # ATR
-    x["ATR14"] = calculate_atr(x)
-    x["ATR_PCT"] = x["ATR14"] / close
+    x["atr14"] = atr(x)
 
-    # Momentum
-    for n in [1, 3, 5, 10, 20, 40, 60]:
-        x[f"RET{n}"] = close.pct_change(n)
+    x["atr_pct"] = (
+        x["atr14"]
+        /
+        close
+    )
+
+    # Rentabilidades
+    for n in [
+        1,
+        3,
+        5,
+        10,
+        20,
+        40,
+        60,
+    ]:
+
+        x[f"ret{n}"] = (
+            close.pct_change(n)
+        )
 
     # Precio frente a medias
-    x["PRICE_SMA20"] = close / x["SMA20"] - 1
-    x["PRICE_SMA50"] = close / x["SMA50"] - 1
-    x["PRICE_SMA100"] = close / x["SMA100"] - 1
-    x["PRICE_SMA200"] = close / x["SMA200"] - 1
+
+    x["price_sma20"] = (
+        close / x["sma20"]
+        - 1
+    )
+
+    x["price_sma50"] = (
+        close / x["sma50"]
+        - 1
+    )
+
+    x["price_sma100"] = (
+        close / x["sma100"]
+        - 1
+    )
+
+    x["price_sma200"] = (
+        close / x["sma200"]
+        - 1
+    )
 
     # Relaciones de medias
-    x["SMA20_SMA50"] = x["SMA20"] / x["SMA50"] - 1
-    x["SMA50_SMA200"] = x["SMA50"] / x["SMA200"] - 1
+
+    x["sma20_sma50"] = (
+        x["sma20"]
+        /
+        x["sma50"]
+        - 1
+    )
+
+    x["sma50_sma200"] = (
+        x["sma50"]
+        /
+        x["sma200"]
+        - 1
+    )
 
     # Pendientes
-    x["SMA20_SLOPE"] = x["SMA20"].pct_change(10)
-    x["SMA50_SLOPE"] = x["SMA50"].pct_change(20)
-    x["SMA200_SLOPE"] = x["SMA200"].pct_change(40)
+
+    x["sma20_slope10"] = (
+        x["sma20"].pct_change(10)
+    )
+
+    x["sma50_slope20"] = (
+        x["sma50"].pct_change(20)
+    )
 
     # Volumen
-    x["VOL5"] = volume.rolling(5).mean()
-    x["VOL20"] = volume.rolling(20).mean()
 
-    x["VOL_RATIO_5_20"] = (
-        x["VOL5"] /
-        x["VOL20"].replace(0, np.nan)
+    x["vol_ratio5_20"] = (
+        volume.rolling(5).mean()
+        /
+        volume.rolling(20).mean()
     )
 
     # Volatilidad
-    x["VOLATILITY20"] = (
+
+    x["volatility20"] = (
         close.pct_change()
         .rolling(20)
         .std()
     )
 
-    x["VOLATILITY60"] = (
+    x["volatility60"] = (
         close.pct_change()
         .rolling(60)
         .std()
     )
 
-    # Máximos y mínimos
-    x["HIGH20"] = high.rolling(20).max()
-    x["HIGH60"] = high.rolling(60).max()
+    # Máximos / mínimos
 
-    x["LOW20"] = low.rolling(20).min()
-    x["LOW60"] = low.rolling(60).min()
-
-    x["DIST_HIGH20"] = close / x["HIGH20"] - 1
-    x["DIST_HIGH60"] = close / x["HIGH60"] - 1
-
-    x["DIST_LOW20"] = close / x["LOW20"] - 1
-    x["DIST_LOW60"] = close / x["LOW60"] - 1
-
-    # Breakouts
-    previous_high20 = x["HIGH20"].shift(1)
-    previous_high60 = x["HIGH60"].shift(1)
-
-    x["BREAKOUT20"] = close / previous_high20 - 1
-    x["BREAKOUT60"] = close / previous_high60 - 1
-
-    # Posición dentro del rango
-    range20 = (
-        x["HIGH20"] -
-        x["LOW20"]
-    ).replace(0, np.nan)
-
-    x["RANGE_POSITION20"] = (
-        close - x["LOW20"]
-    ) / range20
-
-    # Drawdown / recuperación
-    rolling_high60 = close.rolling(60).max()
-
-    x["DRAWDOWN60"] = (
-        close / rolling_high60 - 1
+    high20 = (
+        x["High"]
+        .rolling(20)
+        .max()
     )
 
-    rolling_low60 = close.rolling(60).min()
+    high60 = (
+        x["High"]
+        .rolling(60)
+        .max()
+    )
 
-    x["RECOVERY60"] = (
-        close / rolling_low60 - 1
+    low20 = (
+        x["Low"]
+        .rolling(20)
+        .min()
+    )
+
+    low60 = (
+        x["Low"]
+        .rolling(60)
+        .min()
+    )
+
+    x["dist_high20"] = (
+        close / high20 - 1
+    )
+
+    x["dist_high60"] = (
+        close / high60 - 1
+    )
+
+    x["dist_low20"] = (
+        close / low20 - 1
+    )
+
+    x["dist_low60"] = (
+        close / low60 - 1
+    )
+
+    # Posición dentro del rango
+
+    x["range20_pos"] = (
+        (close - low20)
+        /
+        (high20 - low20)
+        .replace(0, np.nan)
+    )
+
+    x["range60_pos"] = (
+        (close - low60)
+        /
+        (high60 - low60)
+        .replace(0, np.nan)
+    )
+
+    # Rupturas
+
+    x["breakout20"] = (
+        close
+        /
+        high20.shift(1)
+        - 1
+    )
+
+    x["breakout60"] = (
+        close
+        /
+        high60.shift(1)
+        - 1
+    )
+
+    # Drawdown
+
+    max60 = (
+        close
+        .rolling(60)
+        .max()
+    )
+
+    min60 = (
+        close
+        .rolling(60)
+        .min()
+    )
+
+    x["drawdown60"] = (
+        close / max60 - 1
+    )
+
+    x["recovery60"] = (
+        close / min60 - 1
     )
 
     return x
 
 
 # ============================================================
-# DATOS DEL MERCADO
+# VARIABLES QUE EL MODELO ESTUDIA
+# ============================================================
+
+FEATURES = [
+
+    "rsi14",
+    "atr_pct",
+
+    "ret1",
+    "ret3",
+    "ret5",
+    "ret10",
+    "ret20",
+    "ret40",
+    "ret60",
+
+    "price_sma20",
+    "price_sma50",
+    "price_sma100",
+    "price_sma200",
+
+    "sma20_sma50",
+    "sma50_sma200",
+
+    "sma20_slope10",
+    "sma50_slope20",
+
+    "vol_ratio5_20",
+
+    "volatility20",
+    "volatility60",
+
+    "dist_high20",
+    "dist_high60",
+
+    "dist_low20",
+    "dist_low60",
+
+    "range20_pos",
+    "range60_pos",
+
+    "breakout20",
+    "breakout60",
+
+    "drawdown60",
+    "recovery60",
+]
+
+
+# ============================================================
+# MERCADO GENERAL
 # ============================================================
 
 def build_market_features():
+
     market = {}
 
-    for ticker in MARKET_TICKERS:
-        df = download_ticker(ticker)
+    for ticker in MARKETS:
 
-        if df is None:
+        df = download_daily(
+            ticker
+        )
+
+        if df is None or len(df) < 80:
             continue
 
-        f = build_features(df)
+        f = add_features(df)
 
-        prefix = ticker.replace("^", "MKT_")
+        prefix = {
 
-        market[f"{prefix}_RET5"] = f["RET5"]
-        market[f"{prefix}_RET20"] = f["RET20"]
-        market[f"{prefix}_PRICE_SMA50"] = f["PRICE_SMA50"]
-        market[f"{prefix}_PRICE_SMA200"] = f["PRICE_SMA200"]
+            "^GSPC": "sp",
+            "^IXIC": "nd",
+            "^DJI": "dj",
+            "^VIX": "vix",
+
+        }[ticker]
+
+        cols = [
+
+            "Close",
+            "ret1",
+            "ret5",
+            "ret20",
+            "sma20",
+            "sma50",
+            "sma200",
+
+        ]
+
+        m = f[cols].copy()
+
+        m.columns = [
+            f"{prefix}_{c}"
+            for c in cols
+        ]
+
+        market[prefix] = m
 
     if not market:
-        return pd.DataFrame()
+        return None
 
-    result = pd.DataFrame(market)
+    combined = pd.concat(
+        list(market.values()),
+        axis=1
+    ).sort_index()
 
-    return result
+    for prefix in [
+        "sp",
+        "nd",
+        "dj",
+    ]:
+
+        close_col = (
+            f"{prefix}_Close"
+        )
+
+        if close_col in combined:
+
+            combined[
+                f"{prefix}_price_sma50"
+            ] = (
+                combined[close_col]
+                /
+                combined[
+                    f"{prefix}_sma50"
+                ]
+                - 1
+            )
+
+            combined[
+                f"{prefix}_price_sma200"
+            ] = (
+                combined[close_col]
+                /
+                combined[
+                    f"{prefix}_sma200"
+                ]
+                - 1
+            )
+
+    return combined
 
 
 # ============================================================
-# MOVIMIENTO FUTURO
+# RENTABILIDAD FUTURA
 # ============================================================
 
-def future_max_return(close, position, forward_days):
-    end = min(
-        position + forward_days,
-        len(close) - 1
-    )
+def future_max_return(
+    close,
+    position,
+    days=FORWARD_DAYS
+):
 
-    if end <= position:
-        return np.nan
-
-    current = close.iloc[position]
+    if position >= len(close) - 1:
+        return np.nan, np.nan
 
     future = close.iloc[
         position + 1:
-        end + 1
+        position + 1 + days
     ]
 
-    if current <= 0:
-        return np.nan
+    if future.empty:
+        return np.nan, np.nan
+
+    base = close.iloc[position]
+
+    returns = (
+        future / base - 1
+    )
+
+    idx = returns.idxmax()
 
     return (
-        future.max() / current
-    ) - 1
+        float(returns.max()),
+        idx
+    )
 
 
 # ============================================================
-# DETECCIÓN DE MOVIMIENTOS GANADORES
+# DETECCIÓN DE EVENTOS
 # ============================================================
 
-def find_events(features):
-    close = features["Close"]
+def find_events(df):
+
+    close = df["Close"]
 
     candidates = []
 
-    for i in range(len(features)):
-        future_return = future_max_return(
-            close,
-            i,
-            FORWARD_DAYS
+    for i in range(
+        200,
+        len(df) - FORWARD_DAYS
+    ):
+
+        max_ret, future_date = (
+            future_max_return(
+                close,
+                i
+            )
         )
 
-        if pd.notna(future_return):
-            if future_return >= WIN_THRESHOLD:
-                candidates.append({
-                    "position": i,
-                    "date": features.index[i],
-                    "future_return": future_return
-                })
+        if (
+            pd.notna(max_ret)
+            and
+            max_ret >= WIN_THRESHOLD
+        ):
+
+            candidates.append(
+                {
+                    "date": df.index[i],
+
+                    "future_date":
+                        future_date,
+
+                    "future_return":
+                        max_ret,
+                }
+            )
 
     if not candidates:
         return []
 
     selected = []
 
-    last_position = -10_000
+    last_date = None
 
     for event in candidates:
 
-        if (
-            event["position"] -
-            last_position
-            >= EVENT_SEPARATION_DAYS
-        ):
+        current_date = pd.Timestamp(
+            event["date"]
+        )
+
+        if last_date is None:
+
             selected.append(event)
-            last_position = event["position"]
+
+            last_date = (
+                current_date
+            )
+
+            continue
+
+        if (
+            current_date
+            -
+            last_date
+        ).days >= EVENT_SEPARATION_DAYS:
+
+            selected.append(event)
+
+            last_date = (
+                current_date
+            )
 
     return selected
 
 
 # ============================================================
-# VARIABLES UTILIZADAS PARA COMPARAR PATRONES
+# CONSTRUCCIÓN DEL DATASET
 # ============================================================
 
-FEATURE_COLUMNS = [
-    "RSI14",
-    "ATR_PCT",
+def make_dataset(
+    all_features,
+    market_features
+):
 
-    "RET1",
-    "RET3",
-    "RET5",
-    "RET10",
-    "RET20",
-    "RET40",
-    "RET60",
-
-    "PRICE_SMA20",
-    "PRICE_SMA50",
-    "PRICE_SMA100",
-    "PRICE_SMA200",
-
-    "SMA20_SMA50",
-    "SMA50_SMA200",
-
-    "SMA20_SLOPE",
-    "SMA50_SLOPE",
-    "SMA200_SLOPE",
-
-    "VOL_RATIO_5_20",
-
-    "VOLATILITY20",
-    "VOLATILITY60",
-
-    "DIST_HIGH20",
-    "DIST_HIGH60",
-
-    "DIST_LOW20",
-    "DIST_LOW60",
-
-    "BREAKOUT20",
-    "BREAKOUT60",
-
-    "RANGE_POSITION20",
-
-    "DRAWDOWN60",
-    "RECOVERY60",
-]
-
-
-# ============================================================
-# CONSTRUCCIÓN DE DATASET
-# ============================================================
-
-def build_dataset(all_data):
     winners = []
-    controls = []
 
-    for ticker, features in all_data.items():
+    non_winners = []
 
-        events = find_events(features)
+    for ticker, df in all_features.items():
 
-        event_positions = {
-            e["position"]
-            for e in events
-        }
+        if df is None or len(df) < 250:
+            continue
 
-        # ----------------------------
-        # GANADORAS
-        # ----------------------------
+        events = find_events(df)
 
-        for event in events:
+        winning_dates = set()
 
-            pos = event["position"]
+        # ---------------- GANADORES ----------------
 
-            row = features.iloc[pos]
+        for e in events:
 
-            record = {
-                "ticker": ticker,
-                "date": str(
-                    features.index[pos].date()
-                ),
-                "future_return": event[
-                    "future_return"
-                ],
-                "label": 1,
-            }
-
-            for col in FEATURE_COLUMNS:
-                record[col] = safe_float(row.get(col))
-
-            winners.append(record)
-
-        # ----------------------------
-        # CONTROLES
-        # ----------------------------
-
-        # Solo usamos una observación cada
-        # cinco sesiones para evitar que una
-        # misma fase de mercado domine el dataset.
-
-        for pos in range(
-            210,
-            len(features) - FORWARD_DAYS,
-            5
-        ):
-
-            if pos in event_positions:
-                continue
-
-            future_return = future_max_return(
-                features["Close"],
-                pos,
-                FORWARD_DAYS
+            d = pd.Timestamp(
+                e["date"]
             )
 
-            if pd.isna(future_return):
+            if d not in df.index:
                 continue
 
-            if future_return >= WIN_THRESHOLD:
-                continue
+            row = df.loc[d].copy()
 
-            row = features.iloc[pos]
+            if (
+                market_features is not None
+                and
+                d in market_features.index
+            ):
 
-            record = {
-                "ticker": ticker,
-                "date": str(
-                    features.index[pos].date()
-                ),
-                "future_return": future_return,
-                "label": 0,
-            }
+                row = pd.concat(
+                    [
+                        row,
+                        market_features.loc[d],
+                    ]
+                )
 
-            for col in FEATURE_COLUMNS:
-                record[col] = safe_float(row.get(col))
+            row["ticker"] = ticker
 
-            controls.append(record)
+            row["event_date"] = d
+
+            row["future_return"] = (
+                e["future_return"]
+            )
+
+            row["future_date"] = (
+                e["future_date"]
+            )
+
+            winners.append(row)
+
+            winning_dates.add(d)
+
+        # ---------------- CONTROLES ----------------
+
+        eligible = [
+
+            d
+
+            for d in df.index[
+                200:-FORWARD_DAYS
+            ]
+
+            if d not in winning_dates
+
+        ]
+
+        # Un control cada 5 sesiones.
+        selected_controls = (
+            eligible[::5]
+        )
+
+        for d in selected_controls:
+
+            row = df.loc[d].copy()
+
+            if (
+                market_features is not None
+                and
+                d in market_features.index
+            ):
+
+                row = pd.concat(
+                    [
+                        row,
+                        market_features.loc[d],
+                    ]
+                )
+
+            row["ticker"] = ticker
+
+            row["event_date"] = (
+                pd.Timestamp(d)
+            )
+
+            position = (
+                df.index.get_loc(d)
+            )
+
+            max_ret, future_date = (
+                future_max_return(
+                    df["Close"],
+                    position
+                )
+            )
+
+            row["future_return"] = (
+                max_ret
+            )
+
+            row["future_date"] = (
+                future_date
+            )
+
+            non_winners.append(row)
+
+    winners_df = pd.DataFrame(
+        winners
+    )
+
+    controls_df = pd.DataFrame(
+        non_winners
+    )
 
     return (
-        pd.DataFrame(winners),
-        pd.DataFrame(controls)
+        winners_df,
+        controls_df
     )
 
 
@@ -717,439 +1002,620 @@ def build_dataset(all_data):
 # DESCUBRIMIENTO DE PATRONES
 # ============================================================
 
-def discover_patterns(winners, controls):
+def feature_separation(
+    winners,
+    controls,
+    feature
+):
 
-    ranking = []
+    if (
+        feature not in winners.columns
+        or
+        feature not in controls.columns
+    ):
+        return None
 
-    if winners.empty or controls.empty:
+    w = pd.to_numeric(
+        winners[feature],
+        errors="coerce"
+    ).dropna()
+
+    c = pd.to_numeric(
+        controls[feature],
+        errors="coerce"
+    ).dropna()
+
+    if len(w) < 5 or len(c) < 10:
+        return None
+
+    wm = w.median()
+    cm = c.median()
+
+    pooled = math.sqrt(
+        max(
+            (
+                (
+                    w.var()
+                    *
+                    (len(w) - 1)
+                )
+                +
+                (
+                    c.var()
+                    *
+                    (len(c) - 1)
+                )
+            )
+            /
+            max(
+                len(w)
+                +
+                len(c)
+                - 2,
+                1
+            ),
+
+            1e-12,
+        )
+    )
+
+    separation = (
+        abs(wm - cm)
+        /
+        pooled
+    )
+
+    direction = (
+        "higher"
+        if wm > cm
+        else "lower"
+    )
+
+    return {
+
+        "feature":
+            feature,
+
+        "winner_median":
+            float(wm),
+
+        "control_median":
+            float(cm),
+
+        "separation":
+            float(separation),
+
+        "direction":
+            direction,
+
+        "winner_n":
+            int(len(w)),
+
+        "control_n":
+            int(len(c)),
+    }
+
+
+def discover_patterns(
+    winners,
+    controls
+):
+
+    results = []
+
+    for feature in FEATURES:
+
+        r = feature_separation(
+            winners,
+            controls,
+            feature
+        )
+
+        if r:
+            results.append(r)
+
+    # Variables de mercado
+
+    market_features = [
+
+        c
+
+        for c in winners.columns
+
+        if c.startswith(
+            (
+                "sp_",
+                "nd_",
+                "dj_",
+                "vix_",
+            )
+        )
+
+    ]
+
+    for feature in market_features:
+
+        r = feature_separation(
+            winners,
+            controls,
+            feature
+        )
+
+        if r:
+            results.append(r)
+
+    if not results:
         return pd.DataFrame()
 
-    for feature in FEATURE_COLUMNS:
+    ranking = pd.DataFrame(
+        results
+    )
 
-        w = pd.to_numeric(
-            winners[feature],
-            errors="coerce"
-        ).dropna()
-
-        c = pd.to_numeric(
-            controls[feature],
-            errors="coerce"
-        ).dropna()
-
-        if len(w) < 5 or len(c) < 5:
-            continue
-
-        w_median = w.median()
-        c_median = c.median()
-
-        pooled_std = np.sqrt(
-            (
-                w.var() +
-                c.var()
-            ) / 2
-        )
-
-        if not np.isfinite(pooled_std):
-            continue
-
-        if pooled_std == 0:
-            separation = 0
-        else:
-            separation = abs(
-                w_median -
-                c_median
-            ) / pooled_std
-
-        direction = (
-            "higher"
-            if w_median > c_median
-            else "lower"
-        )
-
-        ranking.append({
-            "feature": feature,
-            "winner_median": w_median,
-            "control_median": c_median,
-            "separation": separation,
-            "direction": direction,
-        })
-
-    ranking_df = pd.DataFrame(ranking)
-
-    if ranking_df.empty:
-        return ranking_df
-
-    ranking_df.sort_values(
+    ranking = ranking.sort_values(
         "separation",
-        ascending=False,
-        inplace=True
+        ascending=False
     )
 
-    ranking_df.reset_index(
-        drop=True,
-        inplace=True
+    return ranking.reset_index(
+        drop=True
     )
-
-    return ranking_df
 
 
 # ============================================================
-# SIMILITUD ENTRE PATRONES
+# ESCALAS PARA COMPARAR PATRONES
 # ============================================================
 
-def calculate_similarity(
-    current_row,
-    historical_row,
-    ranking
-):
-    """
-    Compara una situación actual con una
-    situación histórica ganadora.
-
-    Cuanto más cerca de 1, más parecido.
-    """
-
-    if ranking.empty:
-        return np.nan
-
-    top_features = ranking.head(20)
-
-    distances = []
-    weights = []
-
-    for _, r in top_features.iterrows():
-
-        feature = r["feature"]
-
-        current = safe_float(
-            current_row.get(feature)
-        )
-
-        historical = safe_float(
-            historical_row.get(feature)
-        )
-
-        if pd.isna(current) or pd.isna(historical):
-            continue
-
-        separation = safe_float(
-            r["separation"]
-        )
-
-        if pd.isna(separation):
-            continue
-
-        # La escala depende del tamaño de la
-        # diferencia histórica.
-        scale = max(
-            abs(
-                safe_float(
-                    r["winner_median"]
-                ) -
-                safe_float(
-                    r["control_median"]
-                )
-            ),
-            1e-6
-        )
-
-        distance = abs(
-            current - historical
-        ) / scale
-
-        weight = max(
-            separation,
-            0.01
-        )
-
-        distances.append(distance)
-        weights.append(weight)
-
-    if not distances:
-        return np.nan
-
-    weighted_distance = np.average(
-        distances,
-        weights=weights
-    )
-
-    # Conversión de distancia a similitud.
-    similarity = 1 / (
-        1 + weighted_distance
-    )
-
-    return float(similarity)
-
-
-# ============================================================
-# ANÁLOGOS HISTÓRICOS
-# ============================================================
-
-def find_analogs(
-    current_row,
+def build_feature_scales(
     winners,
     ranking
 ):
 
-    analogs = []
+    scales = {}
 
-    if winners.empty:
-        return analogs
+    for feature in ranking[
+        "feature"
+    ].head(20):
+
+        if feature not in winners.columns:
+            continue
+
+        values = pd.to_numeric(
+            winners[feature],
+            errors="coerce"
+        ).dropna()
+
+        if len(values) < 5:
+            continue
+
+        median = values.median()
+
+        q25 = values.quantile(
+            0.25
+        )
+
+        q75 = values.quantile(
+            0.75
+        )
+
+        scale = (
+            q75 - q25
+        )
+
+        if (
+            not np.isfinite(scale)
+            or
+            scale <= 1e-9
+        ):
+
+            scale = values.std()
+
+        if (
+            not np.isfinite(scale)
+            or
+            scale <= 1e-9
+        ):
+            continue
+
+        scales[feature] = {
+
+            "median":
+                float(median),
+
+            "scale":
+                float(scale),
+        }
+
+    return scales
+
+
+# ============================================================
+# SIMILITUD
+# ============================================================
+
+def similarity(
+    current_row,
+    historical_row,
+    ranking,
+    scales
+):
+
+    features = []
+
+    for feature in ranking[
+        "feature"
+    ].head(20):
+
+        if feature not in scales:
+            continue
+
+        a = pd.to_numeric(
+            current_row.get(
+                feature
+            ),
+            errors="coerce"
+        )
+
+        b = pd.to_numeric(
+            historical_row.get(
+                feature
+            ),
+            errors="coerce"
+        )
+
+        if (
+            pd.isna(a)
+            or
+            pd.isna(b)
+        ):
+            continue
+
+        scale = scales[
+            feature
+        ]["scale"]
+
+        distance = (
+            abs(
+                float(a)
+                -
+                float(b)
+            )
+            /
+            scale
+        )
+
+        sep = float(
+            ranking.loc[
+                ranking["feature"]
+                ==
+                feature,
+                "separation"
+            ].iloc[0]
+        )
+
+        weight = max(
+            sep,
+            0.05
+        )
+
+        features.append(
+            (
+                distance,
+                weight
+            )
+        )
+
+    if len(features) < 5:
+        return np.nan
+
+    weighted_distance = (
+        sum(
+            d * w
+            for d, w
+            in features
+        )
+        /
+        sum(
+            w
+            for _, w
+            in features
+        )
+    )
+
+    return float(
+        math.exp(
+            -weighted_distance
+        )
+    )
+
+
+# ============================================================
+# BÚSQUEDA DE ANÁLOGOS
+# ============================================================
+
+def find_analogues(
+    current_row,
+    winners,
+    ranking,
+    scales
+):
+
+    candidates = []
 
     for _, historical in winners.iterrows():
 
-        similarity = calculate_similarity(
+        sim = similarity(
             current_row,
             historical,
-            ranking
+            ranking,
+            scales
         )
 
-        if pd.isna(similarity):
+        if pd.isna(sim):
             continue
 
-        if similarity >= MIN_SIMILARITY:
+        if sim >= MIN_SIMILARITY:
 
-            analogs.append({
-                "ticker": historical["ticker"],
-                "date": historical["date"],
-                "future_return": historical[
-                    "future_return"
-                ],
-                "similarity": similarity,
-            })
+            candidates.append(
+                {
 
-    if not analogs:
+                    "similarity":
+                        sim,
+
+                    "future_return":
+                        historical[
+                            "future_return"
+                        ],
+
+                    "event_date":
+                        historical[
+                            "event_date"
+                        ],
+
+                    "ticker":
+                        historical[
+                            "ticker"
+                        ],
+                }
+            )
+
+    if not candidates:
         return []
 
-    analogs.sort(
-        key=lambda x: x["similarity"],
+    candidates.sort(
+        key=lambda x:
+            x["similarity"],
         reverse=True
     )
 
-    return analogs[
+    return candidates[
         :MAX_ANALOGS_FOR_FORECAST
     ]
 
 
 # ============================================================
-# PREVISIÓN BASADA EN ANÁLOGOS
+# ENTRADA / STOP / OBJETIVOS
 # ============================================================
 
-def calculate_forecast(
-    entry,
-    analogs,
-    current_row
+def calculate_trade_levels(
+    current_row,
+    analogues
 ):
 
-    if len(analogs) < MIN_ANALOGS:
-        return None
+    entry = float(
+        current_row["Close"]
+    )
 
-    returns = np.array([
-        a["future_return"]
-        for a in analogs
-        if pd.notna(a["future_return"])
-    ])
+    atr_pct = float(
+        current_row.get(
+            "atr_pct",
+            np.nan
+        )
+    )
 
-    returns = returns[
-        np.isfinite(returns)
-    ]
+    returns = np.array(
+
+        [
+            a["future_return"]
+
+            for a in analogues
+
+            if pd.notna(
+                a["future_return"]
+            )
+
+        ],
+
+        dtype=float,
+    )
 
     if len(returns) < MIN_ANALOGS:
         return None
 
-    # Percentiles de los casos históricos
-    # comparables.
-    lower_forecast = np.percentile(
+    # Percentiles de los casos
+    # históricos más parecidos.
+
+    p25, p50, p75 = np.percentile(
         returns,
-        25
+        [25, 50, 75]
     )
 
-    upper_forecast = np.percentile(
-        returns,
-        75
+    # Solo se considera una oportunidad
+    # si el escenario inferior conserva
+    # al menos +10%.
+
+    p25 = max(
+        p25,
+        WIN_THRESHOLD
     )
 
-    # Para que una señal tenga sentido como
-    # oportunidad, el extremo inferior
-    # también debe ser positivo.
-    if lower_forecast <= 0:
-        return None
-
-    # El modelo de stop usa volatilidad
-    # histórica del propio valor.
-    atr_pct = safe_float(
-        current_row.get("ATR_PCT")
+    p50 = max(
+        p50,
+        p25
     )
 
-    if pd.isna(atr_pct) or atr_pct <= 0:
-        atr_pct = 0.025
+    # Objetivos
 
-    stop_risk = max(
-        atr_pct * 1.25,
-        0.025
+    target_low = (
+        entry
+        *
+        (1 + p25)
     )
 
-    # Nunca más del 8% de riesgo.
-    stop_risk = min(
-        stop_risk,
-        0.08
+    target_high = (
+        entry
+        *
+        (1 + p75)
     )
 
-    stop = entry * (
-        1 - stop_risk
+    # --------------------------------------------------------
+    # STOP
+    # --------------------------------------------------------
+
+    # Stop basado en volatilidad actual.
+    #
+    # Se utiliza ATR y se limita entre 2,5% y 8%.
+    #
+    # Es orientativo, no una garantía de pérdida máxima.
+
+    if (
+        np.isfinite(atr_pct)
+        and
+        atr_pct > 0
+    ):
+
+        stop_risk = max(
+            1.25 * atr_pct,
+            0.025
+        )
+
+        stop_risk = min(
+            stop_risk,
+            0.08
+        )
+
+    else:
+
+        stop_risk = 0.05
+
+    stop = (
+        entry
+        *
+        (1 - stop_risk)
     )
 
-    target_low = entry * (
-        1 + lower_forecast
+    risk_pct = (
+        (entry - stop)
+        /
+        entry
     )
 
-    target_high = entry * (
-        1 + upper_forecast
+    # Riesgo / beneficio
+
+    rr_low = (
+        p25
+        /
+        risk_pct
     )
 
-    risk_reward_low = (
-        lower_forecast /
-        stop_risk
-    )
-
-    risk_reward_high = (
-        upper_forecast /
-        stop_risk
+    rr_high = (
+        p75
+        /
+        risk_pct
     )
 
     return {
-        "entry": entry,
-        "target_low": target_low,
-        "target_high": target_high,
-        "forecast_low": lower_forecast,
-        "forecast_high": upper_forecast,
-        "stop": stop,
-        "risk_pct": stop_risk,
-        "rr_low": risk_reward_low,
-        "rr_high": risk_reward_high,
-        "analogs_count": len(analogs),
-        "median_similarity": float(
-            np.median([
-                a["similarity"]
-                for a in analogs
-            ])
-        ),
+
+        "entry":
+            entry,
+
+        "target_low":
+            target_low,
+
+        "target_high":
+            target_high,
+
+        "forecast_low":
+            p25,
+
+        "forecast_high":
+            p75,
+
+        "stop":
+            stop,
+
+        "risk_pct":
+            risk_pct,
+
+        "rr_low":
+            rr_low,
+
+        "rr_high":
+            rr_high,
     }
-
-
-# ============================================================
-# AUDITORÍA DE ANÁLOGOS
-# ============================================================
-
-def save_analogs_audit(
-    ticker,
-    analogs,
-    forecast
-):
-
-    if not analogs:
-        return
-
-    rows = []
-
-    for a in analogs:
-        rows.append({
-            "current_ticker": ticker,
-            "historical_ticker": a["ticker"],
-            "historical_date": a["date"],
-            "historical_future_return":
-                a["future_return"],
-            "similarity": a["similarity"],
-            "current_forecast_low":
-                forecast["forecast_low"],
-            "current_forecast_high":
-                forecast["forecast_high"],
-        })
-
-    path = Path(
-        "historical_analogs.csv"
-    )
-
-    df_new = pd.DataFrame(rows)
-
-    if path.exists():
-        try:
-            df_old = pd.read_csv(path)
-            df = pd.concat(
-                [df_old, df_new],
-                ignore_index=True
-            )
-        except Exception:
-            df = df_new
-    else:
-        df = df_new
-
-    # Evita duplicados exactos.
-    df.drop_duplicates(
-        subset=[
-            "current_ticker",
-            "historical_ticker",
-            "historical_date"
-        ],
-        inplace=True
-    )
-
-    df.to_csv(
-        path,
-        index=False
-    )
 
 
 # ============================================================
 # VALIDACIÓN TEMPORAL
 # ============================================================
 
-def temporal_validation(winners, ranking):
-    """
-    Validación sencilla de que los patrones
-    históricos también aparecen en periodos
-    posteriores.
+def temporal_validation(
+    winners,
+    controls
+):
 
-    No se utiliza para generar directamente
-    las alertas.
-    """
+    if len(winners) < 12:
+        return None
 
-    if winners.empty or len(winners) < 10:
-        return {
-            "train": 0,
-            "test": 0,
-            "median_similarity": np.nan
-        }
-
-    winners = winners.copy()
-
-    winners["date_dt"] = pd.to_datetime(
-        winners["date"]
+    winners = winners.sort_values(
+        "event_date"
     )
 
-    winners.sort_values(
-        "date_dt",
-        inplace=True
-    )
-
-    split = int(
-        len(winners) * 0.70
+    cutoff = int(
+        len(winners)
+        *
+        0.70
     )
 
     train = winners.iloc[
-        :split
-    ].copy()
+        :cutoff
+    ]
 
     test = winners.iloc[
-        split:
-    ].copy()
+        cutoff:
+    ]
 
-    if train.empty or test.empty:
-        return {
-            "train": len(train),
-            "test": len(test),
-            "median_similarity": np.nan
-        }
+    if (
+        len(train) < 8
+        or
+        len(test) < 3
+    ):
+        return None
+
+    min_test_date = (
+        test["event_date"].min()
+    )
+
+    train_controls = controls[
+        controls["event_date"]
+        <
+        min_test_date
+    ]
+
+    ranking = discover_patterns(
+        train,
+        train_controls
+    )
+
+    if ranking.empty:
+        return None
+
+    scales = build_feature_scales(
+        train,
+        ranking
+    )
+
+    if not scales:
+        return None
 
     similarities = []
 
@@ -1157,140 +1623,293 @@ def temporal_validation(winners, ranking):
 
         sims = []
 
-        for _, historical in train.iterrows():
+        for _, hist in train.iterrows():
 
-            similarity = calculate_similarity(
+            s = similarity(
                 row,
-                historical,
-                ranking
+                hist,
+                ranking,
+                scales
             )
 
-            if pd.notna(similarity):
-                sims.append(similarity)
+            if pd.notna(s):
+                sims.append(s)
 
         if sims:
             similarities.append(
                 max(sims)
             )
 
+    if not similarities:
+        return None
+
     return {
-        "train": len(train),
-        "test": len(test),
-        "median_similarity": (
-            float(np.median(similarities))
-            if similarities
-            else np.nan
-        )
+
+        "train_events":
+            len(train),
+
+        "test_events":
+            len(test),
+
+        "test_mean_best_similarity":
+            float(
+                np.mean(
+                    similarities
+                )
+            ),
+
+        "test_median_best_similarity":
+            float(
+                np.median(
+                    similarities
+                )
+            ),
     }
 
 
 # ============================================================
-# ENVÍO TELEGRAM
+# ESTADO DIARIO
 # ============================================================
 
-def send_telegram(message):
-    if not TELEGRAM_BOT_TOKEN:
-        print(
-            "[TELEGRAM] Falta TELEGRAM_BOT_TOKEN"
-        )
-        return False
+def load_state():
 
-    if not TELEGRAM_CHAT_ID:
-        print(
-            "[TELEGRAM] Falta TELEGRAM_CHAT_ID"
+    today = (
+        datetime.now(
+            timezone.utc
         )
+        .date()
+        .isoformat()
+    )
+
+    try:
+
+        if STATE_FILE.exists():
+
+            data = json.loads(
+                STATE_FILE.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            if (
+                data.get("date")
+                ==
+                today
+            ):
+
+                return data
+
+    except Exception:
+        pass
+
+    return {
+
+        "date":
+            today,
+
+        "sent_tickers":
+            [],
+    }
+
+
+def save_state(state):
+
+    STATE_FILE.write_text(
+
+        json.dumps(
+            state,
+            indent=2,
+            ensure_ascii=False
+        ),
+
+        encoding="utf-8"
+    )
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
+
+def send_telegram(text):
+
+    if (
+        not TELEGRAM_BOT_TOKEN
+        or
+        not TELEGRAM_CHAT_ID
+    ):
+
+        print(
+            "[ERROR] Faltan "
+            "TELEGRAM_BOT_TOKEN "
+            "o "
+            "TELEGRAM_CHAT_ID"
+        )
+
         return False
 
     url = (
-        "https://api.telegram.org/bot"
-        f"{TELEGRAM_BOT_TOKEN}"
+        "https://api.telegram.org/"
+        f"bot{TELEGRAM_BOT_TOKEN}"
         "/sendMessage"
     )
 
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-    }
-
     try:
+
         response = requests.post(
+
             url,
-            json=payload,
-            timeout=20
+
+            json={
+
+                "chat_id":
+                    TELEGRAM_CHAT_ID,
+
+                "text":
+                    text,
+            },
+
+            timeout=20,
         )
 
-        if response.status_code != 200:
-            print(
-                "[TELEGRAM ERROR]",
-                response.text
-            )
-            return False
+        if response.ok:
+            return True
 
-        return True
+        print(
+            "[ERROR TELEGRAM]",
+            response.text
+        )
+
+        return False
 
     except Exception as e:
+
         print(
-            "[TELEGRAM ERROR]",
+            "[ERROR TELEGRAM]",
             e
         )
+
         return False
 
 
 # ============================================================
-# FORMATO DE ALERTA
+# FORMATO
 # ============================================================
 
-def build_alert(
-    ticker,
-    forecast
-):
+def fmt_price(value):
 
-    name = COMPANY_NAMES.get(
-        ticker,
-        ticker
-    )
+    if value >= 1000:
+
+        return (
+            f"{value:,.0f}"
+        )
+
+    if value >= 100:
+
+        return (
+            f"{value:,.2f}"
+        )
+
+    if value >= 10:
+
+        return (
+            f"{value:,.2f}"
+        )
 
     return (
+        f"{value:,.3f}"
+    )
+
+
+# ============================================================
+# MENSAJE TELEGRAM
+# ============================================================
+
+def make_alert(
+    ticker,
+    trade
+):
+
+    return (
+
         "🚨 OPORTUNIDAD\n\n"
-        f"{ticker} — {name}\n\n"
+
+        f"{ticker} — "
+        f"{NAMES.get(ticker, ticker)}\n\n"
+
         f"Entrada: "
-        f"{fmt_price(forecast['entry'])}\n"
+        f"{fmt_price(trade['entry'])}\n"
+
         f"Objetivo estimado: "
-        f"{fmt_price(forecast['target_low'])}"
-        f"–"
-        f"{fmt_price(forecast['target_high'])}\n"
+        f"{fmt_price(trade['target_low'])}"
+        "–"
+        f"{fmt_price(trade['target_high'])}\n"
+
         f"Previsión: "
-        f"+{forecast['forecast_low'] * 100:.0f}%"
-        f" / "
-        f"+{forecast['forecast_high'] * 100:.0f}%\n\n"
+        f"+{trade['forecast_low'] * 100:.0f}%"
+        " / "
+        f"+{trade['forecast_high'] * 100:.0f}%\n\n"
+
         f"Stop orientativo: "
-        f"{fmt_price(forecast['stop'])}\n"
+        f"{fmt_price(trade['stop'])}\n"
+
         f"Riesgo: "
-        f"-{forecast['risk_pct'] * 100:.1f}%\n"
+        f"-{trade['risk_pct'] * 100:.1f}%\n"
+
         f"Riesgo/Beneficio: "
-        f"1:{forecast['rr_low']:.1f}"
-        f" / "
-        f"1:{forecast['rr_high']:.1f}"
+        f"1:{trade['rr_low']:.1f}"
+        " / "
+        f"1:{trade['rr_high']:.1f}"
     )
 
 
 # ============================================================
-# ANÁLISIS DE TODAS LAS ACCIONES
+# MAIN
 # ============================================================
 
-def build_all_data():
-
-    all_data = {}
+def main():
 
     print(
-        "\n=============================="
+        "=" * 70
     )
+
     print(
-        "DESCARGANDO DATOS HISTÓRICOS"
+        "MODELO DE PATRONES HISTÓRICOS"
     )
+
     print(
-        "=============================="
+        f"Histórico desde: "
+        f"{START_DATE}"
     )
+
+    print(
+        "Umbral de aprendizaje: "
+        f"+{WIN_THRESHOLD * 100:.0f}%"
+    )
+
+    print(
+        "Máximo de alertas hoy: "
+        f"{MAX_DAILY_ALERTS}"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    # --------------------------------------------------------
+    # MERCADO
+    # --------------------------------------------------------
+
+    market_features = (
+        build_market_features()
+    )
+
+    # --------------------------------------------------------
+    # DESCARGA DE LAS 49
+    # --------------------------------------------------------
+
+    all_features = {}
+
+    failed = []
 
     for ticker in TICKERS:
 
@@ -1298,138 +1917,99 @@ def build_all_data():
             f"Analizando {ticker}..."
         )
 
-        df = download_ticker(
+        raw = download_daily(
             ticker
         )
 
-        if df is None:
-            print(
-                f"  -> Sin datos suficientes"
+        if (
+            raw is None
+            or
+            len(raw) < 250
+        ):
+
+            failed.append(
+                ticker
             )
+
             continue
 
-        features = build_features(
-            df
-        )
+        all_features[
+            ticker
+        ] = add_features(raw)
 
-        all_data[ticker] = features
+    print()
+
+    print(
+        f"Valores válidos: "
+        f"{len(all_features)}/"
+        f"{len(TICKERS)}"
+    )
+
+    if len(all_features) < 20:
 
         print(
-            f"  -> {len(features)} sesiones"
+            "[ERROR] Demasiados "
+            "valores sin datos."
         )
 
-    return all_data
-
-
-# ============================================================
-# PROCESO PRINCIPAL
-# ============================================================
-
-def main():
-
-    print(
-        "\n=========================================="
-    )
-    print(
-        " MODELO DE PATRONES HISTÓRICOS — 49 VALORES"
-    )
-    print(
-        "=========================================="
-    )
-
-    print(
-        f"Periodo histórico: "
-        f"{START_DATE} → hoy"
-    )
-
-    print(
-        f"Umbral ganador: "
-        f"+{WIN_THRESHOLD * 100:.0f}%"
-    )
-
-    print(
-        f"Máximo alertas diarias: "
-        f"{MAX_DAILY_ALERTS}"
-    )
-
-    # --------------------------------------------------------
-    # ESTADO
-    # --------------------------------------------------------
-
-    state = load_state()
-
-    state = prepare_today_state(
-        state
-    )
-
-    print(
-        "\nFecha del estado:",
-        state["date"]
-    )
-
-    print(
-        "Alertas ya enviadas hoy:",
-        state["sent_tickers"]
-    )
-
-    save_state(state)
-
-    # --------------------------------------------------------
-    # DATOS
-    # --------------------------------------------------------
-
-    all_data = build_all_data()
-
-    if len(all_data) == 0:
-        print(
-            "No se han podido obtener datos."
-        )
         return
 
     # --------------------------------------------------------
     # DATASET
     # --------------------------------------------------------
 
-    print(
-        "\n=============================="
-    )
-    print(
-        "CONSTRUYENDO DATASET"
-    )
-    print(
-        "=============================="
-    )
-
-    winners, controls = build_dataset(
-        all_data
+    winners, controls = (
+        make_dataset(
+            all_features,
+            market_features
+        )
     )
 
     print(
-        f"Casos ganadores: "
+        f"Eventos ganadores encontrados: "
         f"{len(winners)}"
     )
 
     print(
-        f"Casos no ganadores: "
+        f"Casos de control: "
         f"{len(controls)}"
     )
 
-    if winners.empty:
-        print(
-            "No hay suficientes movimientos "
-            "ganadores."
-        )
-        return
+    if len(winners) < MIN_ANALOGS:
 
-    if controls.empty:
         print(
-            "No hay suficientes controles."
+            "[INFO] Todavía no hay "
+            "suficientes eventos históricos."
         )
+
         return
 
     # --------------------------------------------------------
-    # GUARDAR DATASETS
+    # DESCUBRIR PATRONES
     # --------------------------------------------------------
+
+    ranking = discover_patterns(
+        winners,
+        controls
+    )
+
+    if ranking.empty:
+
+        print(
+            "[INFO] No se han podido "
+            "descubrir patrones."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # GUARDAR DATOS
+    # --------------------------------------------------------
+
+    ranking.to_csv(
+        "pattern_feature_ranking.csv",
+        index=False
+    )
 
     winners.to_csv(
         "historical_winners.csv",
@@ -1442,341 +2022,328 @@ def main():
     )
 
     # --------------------------------------------------------
-    # DESCUBRIR PATRONES
+    # MOSTRAR PATRONES
     # --------------------------------------------------------
 
-    print(
-        "\n=============================="
-    )
-    print(
-        "DESCUBRIENDO PATRONES"
-    )
-    print(
-        "=============================="
-    )
+    print()
 
-    ranking = discover_patterns(
-        winners,
-        controls
-    )
-
-    if ranking.empty:
-        print(
-            "No se han podido descubrir "
-            "patrones suficientes."
-        )
-        return
-
-    ranking.to_csv(
-        "pattern_feature_ranking.csv",
-        index=False
+    print(
+        "TOP PATRONES DETECTADOS:"
     )
 
     print(
-        "\nPrincipales variables:"
-    )
 
-    print(
-        ranking.head(15).to_string(
+        ranking[
+            [
+                "feature",
+                "separation",
+                "direction",
+            ]
+        ]
+        .head(12)
+        .to_string(
             index=False
         )
+
     )
 
     # --------------------------------------------------------
     # VALIDACIÓN
     # --------------------------------------------------------
 
-    validation = temporal_validation(
-        winners,
-        ranking
+    validation = (
+        temporal_validation(
+            winners,
+            controls
+        )
     )
 
-    print(
-        "\nValidación temporal:"
-    )
+    if validation:
 
-    print(
-        f"Train: {validation['train']}"
-    )
+        print()
 
-    print(
-        f"Test: {validation['test']}"
-    )
-
-    if pd.notna(
-        validation["median_similarity"]
-    ):
         print(
-            "Similitud mediana test:",
-            round(
-                validation[
-                    "median_similarity"
-                ],
-                3
-            )
+            "VALIDACIÓN TEMPORAL:"
+        )
+
+        print(
+            validation
         )
 
     # --------------------------------------------------------
-    # EVALUAR ACTUALMENTE LAS 49
+    # ESCALAS
+    # --------------------------------------------------------
+
+    scales = (
+        build_feature_scales(
+            winners,
+            ranking
+        )
+    )
+
+    if not scales:
+
+        print(
+            "[INFO] No hay escalas "
+            "suficientes."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # ESTADO DIARIO
+    # --------------------------------------------------------
+
+    state = load_state()
+
+    sent_today = set(
+        state.get(
+            "sent_tickers",
+            []
+        )
+    )
+
+    remaining_slots = max(
+        0,
+        MAX_DAILY_ALERTS
+        -
+        len(sent_today)
+    )
+
+    if remaining_slots == 0:
+
+        print(
+            "[INFO] Ya se alcanzó "
+            "el máximo diario."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # BUSCAR OPORTUNIDADES
     # --------------------------------------------------------
 
     opportunities = []
 
-    print(
-        "\n=============================="
-    )
-    print(
-        "BUSCANDO OPORTUNIDADES ACTUALES"
-    )
-    print(
-        "=============================="
-    )
+    for ticker, df in (
+        all_features.items()
+    ):
 
-    for ticker, features in all_data.items():
+        if ticker in sent_today:
+            continue
 
-        # MUY IMPORTANTE:
-        # si ya se envió hoy, no se vuelve
-        # a mandar aunque siga cumpliendo.
-        if ticker_already_sent_today(
-            state,
-            ticker
+        current = (
+            df.iloc[-1].copy()
+        )
+
+        current_date = (
+            df.index[-1]
+        )
+
+        analogues = (
+            find_analogues(
+                current,
+                winners,
+                ranking,
+                scales
+            )
+        )
+
+        if (
+            len(analogues)
+            <
+            MIN_ANALOGS
         ):
-            print(
-                f"{ticker}: "
-                f"YA ENVIADA HOY → OMITIDA"
+            continue
+
+        trade = (
+            calculate_trade_levels(
+                current,
+                analogues
             )
-            continue
-
-        if len(features) < 210:
-            continue
-
-        current_row = features.iloc[-1]
-
-        entry = safe_float(
-            current_row["Close"]
         )
 
-        if pd.isna(entry) or entry <= 0:
+        if trade is None:
             continue
 
-        analogs = find_analogs(
-            current_row,
-            winners,
-            ranking
+        # El escenario inferior
+        # debe seguir siendo >= +10%.
+
+        if (
+            trade["forecast_low"]
+            <
+            WIN_THRESHOLD
+        ):
+            continue
+
+        median_similarity = float(
+            np.median(
+                [
+                    a["similarity"]
+                    for a in analogues
+                ]
+            )
         )
 
-        if len(analogs) < MIN_ANALOGS:
-
-            print(
-                f"{ticker}: "
-                f"{len(analogs)} análogos "
-                f"→ insuficientes"
-            )
-
-            continue
-
-        forecast = calculate_forecast(
-            entry,
-            analogs,
-            current_row
-        )
-
-        if forecast is None:
-
-            print(
-                f"{ticker}: "
-                f"análogos encontrados, "
-                f"pero sin previsión válida"
-            )
-
-            continue
-
-        # ----------------------------------------------------
-        # SCORE INTERNO
-        # ----------------------------------------------------
+        # Puntuación interna para decidir
+        # cuáles son las 4 coincidencias
+        # más fuertes.
+        #
         # NO se muestra al usuario.
-        # Solo sirve para decidir qué 4
-        # oportunidades tienen mayor
-        # similitud histórica.
 
-        similarity_score = (
-            forecast["median_similarity"]
-        )
+        score = (
 
-        analog_score = min(
-            forecast["analogs_count"] / 15,
-            1.0
-        )
+            median_similarity
+            * 0.60
 
-        forecast_score = min(
-            forecast["forecast_low"] / 0.20,
-            1.0
-        )
-
-        internal_score = (
-            similarity_score * 0.60
             +
-            analog_score * 0.20
-            +
-            forecast_score * 0.20
-        )
 
-        opportunity = {
-            "ticker": ticker,
-            "forecast": forecast,
-            "analogs": analogs,
-            "score": internal_score,
-        }
+            min(
+                len(analogues)
+                /
+                15.0,
+                1.0
+            )
+            * 0.20
+
+            +
+
+            min(
+                max(
+                    trade[
+                        "forecast_low"
+                    ],
+                    0
+                )
+                /
+                0.20,
+                1.0
+            )
+            * 0.20
+        )
 
         opportunities.append(
-            opportunity
+            {
+
+                "ticker":
+                    ticker,
+
+                "date":
+                    current_date,
+
+                "trade":
+                    trade,
+
+                "analogues":
+                    len(analogues),
+
+                "median_similarity":
+                    median_similarity,
+
+                "score":
+                    score,
+            }
         )
 
-        print(
-            f"{ticker}: "
-            f"OPORTUNIDAD | "
-            f"análogos={len(analogs)} | "
-            f"similitud="
-            f"{forecast['median_similarity']:.3f} | "
-            f"previsión="
-            f"{forecast['forecast_low'] * 100:.1f}%"
-            f"–"
-            f"{forecast['forecast_high'] * 100:.1f}%"
-        )
-
     # --------------------------------------------------------
-    # ORDENAR OPORTUNIDADES
+    # NINGUNA OPORTUNIDAD
     # --------------------------------------------------------
 
-    opportunities.sort(
-        key=lambda x: x["score"],
-        reverse=True
-    )
+    if not opportunities:
 
-    # --------------------------------------------------------
-    # MÁXIMO 4 AL DÍA
-    # --------------------------------------------------------
-
-    available_slots = (
-        MAX_DAILY_ALERTS -
-        len(state["sent_tickers"])
-    )
-
-    if available_slots <= 0:
+        print()
 
         print(
-            "\nLímite diario alcanzado."
+            "No hay oportunidades "
+            "suficientes en esta ejecución."
         )
 
         save_state(state)
 
         return
 
+    # --------------------------------------------------------
+    # ORDEN INTERNO
+    # --------------------------------------------------------
+
+    opportunities.sort(
+        key=lambda x:
+            x["score"],
+        reverse=True
+    )
+
     selected = opportunities[
-        :available_slots
+        :remaining_slots
     ]
 
-    # --------------------------------------------------------
-    # ENVIAR TELEGRAM
-    # --------------------------------------------------------
+    print()
 
     print(
-        "\n=============================="
+        f"Oportunidades encontradas: "
+        f"{len(opportunities)}"
     )
+
     print(
-        "ENVÍO TELEGRAM"
+        f"Alertas que se enviarán ahora: "
+        f"{len(selected)}"
     )
-    print(
-        "=============================="
-    )
+
+    # --------------------------------------------------------
+    # ENVIAR UNA POR UNA
+    # --------------------------------------------------------
 
     for opportunity in selected:
 
-        ticker = opportunity[
-            "ticker"
-        ]
-
-        forecast = opportunity[
-            "forecast"
-        ]
-
-        analogs = opportunity[
-            "analogs"
-        ]
-
-        message = build_alert(
-            ticker,
-            forecast
+        ticker = (
+            opportunity["ticker"]
         )
+
+        trade = (
+            opportunity["trade"]
+        )
+
+        message = make_alert(
+            ticker,
+            trade
+        )
+
+        print()
 
         print(
-            "\nEnviando:",
-            ticker
-        )
-
-        success = send_telegram(
             message
         )
 
-        if success:
+        ok = send_telegram(
+            message
+        )
 
-            print(
-                f"{ticker}: "
-                f"Telegram enviado correctamente"
-            )
+        if ok:
 
-            # SOLO se marca como enviado
-            # si Telegram confirmó el envío.
-            register_sent_ticker(
-                state,
+            sent_today.add(
                 ticker
             )
 
-            save_analogs_audit(
-                ticker,
-                analogs,
-                forecast
+            state[
+                "sent_tickers"
+            ] = sorted(
+                sent_today
             )
 
-            # Guardar inmediatamente.
-            # Así, incluso si posteriormente
-            # falla otra parte del proceso,
-            # este ticker ya queda registrado.
-            save_state(state)
-
-        else:
-
-            print(
-                f"{ticker}: "
-                f"ERROR enviando Telegram"
+            save_state(
+                state
             )
 
-    # --------------------------------------------------------
-    # ESTADO FINAL
-    # --------------------------------------------------------
-
-    save_state(state)
+    print()
 
     print(
-        "\n=============================="
-    )
-    print(
-        "PROCESO TERMINADO"
-    )
-    print(
-        "=============================="
+        "Proceso terminado."
     )
 
-    print(
-        "Alertas enviadas hoy:",
-        state["sent_tickers"]
-    )
 
-    print(
-        "Total hoy:",
-        len(state["sent_tickers"])
-    )
-
+# ============================================================
+# EJECUCIÓN
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+
+    main()v
