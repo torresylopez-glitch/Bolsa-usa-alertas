@@ -17,7 +17,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Descargar repositorio
         uses: actions/checkout@v4
         with:
@@ -45,15 +44,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if [ -f alert_state.json ]; then
-            git add alert_state.json
+          git add alert_state.json
 
-            if git diff --cached --quiet; then
-              echo "No hay cambios en el estado."
-            else
-              git commit -m "Actualizar estado de alertas"
-              git push
-            fi
+          if git diff --cached --quiet; then
+            echo "No hay cambios en el estado."
           else
-            echo "No existe alert_state.json. No hay estado que guardar."
+            git commit -m "Actualizar estado de alertas"
+            git push
           fi
