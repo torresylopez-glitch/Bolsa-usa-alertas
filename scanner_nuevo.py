@@ -3,7 +3,6 @@ import json
 import math
 from pathlib import Path
 from datetime import datetime, timezone
-
 import numpy as np
 import pandas as pd
 import requests
@@ -11,12 +10,20 @@ import yfinance as yf
 
 # ============================================================
 # ESCÁNER DE PATRONES HISTÓRICOS — 49 VALORES
+#
 # Aprende de movimientos >= +10% desde 01/01/2025
 # y busca analogías actuales.
+#
+# CAMBIOS DE ESTA VERSIÓN:
+#
+# 1. SOLO ENVÍA EL MEJOR CHOLLO.
+# 2. Muestra SCORE /100.
+# 3. Calcula PRECIO MÁXIMO DE COMPRA.
+# 4. Añade botón ABRIR DEGIRO EN LA ACCIÓN DETECTADA.
+# 5. Mantiene stop, objetivos, previsión y R/R.
 # ============================================================
 
 START_DATE = "2025-01-01"
-
 WIN_THRESHOLD = 0.10
 FORWARD_DAYS = 20
 EVENT_SEPARATION_DAYS = 20
@@ -25,28 +32,37 @@ EVENT_SEPARATION_DAYS = 20
 # SENSIBILIDAD DEL MODELO
 # ------------------------------------------------------------
 
-# Número mínimo de casos históricos parecidos.
 MIN_ANALOGS = 5
-
-# Similitud mínima con los casos ganadores históricos.
 MIN_SIMILARITY = 0.62
 
-# Máximo de oportunidades que puede enviar en un día.
-MAX_DAILY_ALERTS = 4
+# SOLO UNA ALERTA POR EJECUCIÓN/DÍA
+MAX_DAILY_ALERTS = 1
 
-# Máximo de analogías utilizadas para calcular la previsión.
 MAX_ANALOGS_FOR_FORECAST = 30
+
+# ------------------------------------------------------------
+# PRECIO MÁXIMO DE COMPRA
+# ------------------------------------------------------------
+
+MIN_REQUIRED_UPSIDE = 0.10
 
 # ------------------------------------------------------------
 # TELEGRAM
 # ------------------------------------------------------------
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN",
+    ""
+)
 
-# Estado diario para no repetir oportunidades.
-STATE_FILE = Path("alert_state.json")
+TELEGRAM_CHAT_ID = os.getenv(
+    "TELEGRAM_CHAT_ID",
+    ""
+)
 
+STATE_FILE = Path(
+    "alert_state.json"
+)
 
 # ============================================================
 # UNIVERSO DE 49 VALORES
@@ -125,7 +141,6 @@ TICKERS = [
     "ZPDF.DE",
 ]
 
-
 # ============================================================
 # NOMBRES
 # ============================================================
@@ -142,13 +157,11 @@ NAMES = {
     "TSLA": "Tesla",
     "AMD": "AMD",
     "NFLX": "Netflix",
-
     "JPM": "JPMorgan",
     "V": "Visa",
     "MA": "Mastercard",
     "COST": "Costco",
     "WMT": "Walmart",
-
     "LLY": "Eli Lilly",
     "XOM": "Exxon Mobil",
     "ORCL": "Oracle",
@@ -191,6 +204,46 @@ NAMES = {
     "ZPDF.DE": "SPDR U.S. Financials",
 }
 
+# ============================================================
+# ENLACES OFICIALES DE DEGIRO
+#
+# Estos son enlaces a páginas concretas de DEGIRO.
+# No son supuestos deep-links a la app.
+#
+# Si una acción no aparece aquí, el botón abre DEGIRO
+# general para evitar enviar a una URL incorrecta.
+# ============================================================
+
+DEGIRO_URLS = {
+
+    "AAPL":
+        "https://www.degiro.es/cotizar/acciones-apple",
+
+    "MSFT":
+        "https://www.degiro.es/cotizar/acciones-microsoft",
+
+    "NVDA":
+        "https://www.degiro.es/cotizar/acciones-nvidia",
+
+    "AMZN":
+        "https://www.degiro.es/cotizar/acciones-amazon",
+
+    "GOOGL":
+        "https://www.degiro.es/cotizar/acciones-alphabet",
+
+    "META":
+        "https://www.degiro.es/cotizar/acciones-meta",
+
+    "NFLX":
+        "https://www.degiro.es/cotizar/acciones-netflix",
+
+    "INTC":
+        "https://www.degiro.es/cotizar/acciones-intel",
+}
+
+DEGIRO_GENERAL_URL = (
+    "https://www.degiro.es/trader"
+)
 
 # ============================================================
 # ÍNDICES DE MERCADO
@@ -203,21 +256,28 @@ MARKETS = [
     "^VIX",
 ]
 
-
 # ============================================================
 # UTILIDADES
 # ============================================================
 
 def flatten_columns(df):
 
-    if isinstance(df.columns, pd.MultiIndex):
+    if isinstance(
+        df.columns,
+        pd.MultiIndex
+    ):
 
         df.columns = [
-            c[0] if isinstance(c, tuple) else c
+            c[0]
+            if isinstance(c, tuple)
+            else c
             for c in df.columns
         ]
 
-    df.columns = [str(c) for c in df.columns]
+    df.columns = [
+        str(c)
+        for c in df.columns
+    ]
 
     return df
 
@@ -226,13 +286,20 @@ def flatten_columns(df):
 # DESCARGA DE DATOS
 # ============================================================
 
-def download_daily(ticker, start=START_DATE):
+def download_daily(
+    ticker,
+    start=START_DATE
+):
 
     try:
 
-        # End es exclusivo en yfinance.
-        # De esta forma utilizamos el último cierre disponible.
-        end = datetime.now(timezone.utc).date().isoformat()
+        end = (
+            datetime.now(
+                timezone.utc
+            )
+            .date()
+            .isoformat()
+        )
 
         df = yf.download(
             ticker,
@@ -244,7 +311,11 @@ def download_daily(ticker, start=START_DATE):
             threads=False,
         )
 
-        if df is None or df.empty:
+        if (
+            df is None
+            or
+            df.empty
+        ):
             return None
 
         df = flatten_columns(df)
@@ -257,10 +328,15 @@ def download_daily(ticker, start=START_DATE):
             "Volume",
         ]
 
-        if not all(c in df.columns for c in needed):
+        if not all(
+            c in df.columns
+            for c in needed
+        ):
             return None
 
-        df = df[needed].copy()
+        df = df[
+            needed
+        ].copy()
 
         df = df.dropna(
             subset=[
@@ -291,7 +367,10 @@ def download_daily(ticker, start=START_DATE):
 # RSI
 # ============================================================
 
-def rsi(series, period=14):
+def rsi(
+    series,
+    period=14
+):
 
     delta = series.diff()
 
@@ -341,13 +420,20 @@ def rsi(series, period=14):
 # ATR
 # ============================================================
 
-def atr(df, period=14):
+def atr(
+    df,
+    period=14
+):
 
-    prev_close = df["Close"].shift(1)
+    prev_close = (
+        df["Close"].shift(1)
+    )
 
     tr = pd.concat(
         [
-            df["High"] - df["Low"],
+            df["High"]
+            -
+            df["Low"],
 
             (
                 df["High"]
@@ -362,7 +448,9 @@ def atr(df, period=14):
             ).abs(),
         ],
         axis=1,
-    ).max(axis=1)
+    ).max(
+        axis=1
+    )
 
     return tr.rolling(
         period
@@ -388,6 +476,7 @@ def add_features(df):
     )
 
     # Medias
+
     x["sma20"] = (
         close.rolling(20).mean()
     )
@@ -405,10 +494,16 @@ def add_features(df):
     )
 
     # RSI
-    x["rsi14"] = rsi(close)
+
+    x["rsi14"] = rsi(
+        close
+    )
 
     # ATR
-    x["atr14"] = atr(x)
+
+    x["atr14"] = atr(
+        x
+    )
 
     x["atr_pct"] = (
         x["atr14"]
@@ -417,6 +512,7 @@ def add_features(df):
     )
 
     # Rentabilidades
+
     for n in [
         1,
         3,
@@ -549,14 +645,20 @@ def add_features(df):
         (close - low20)
         /
         (high20 - low20)
-        .replace(0, np.nan)
+        .replace(
+            0,
+            np.nan
+        )
     )
 
     x["range60_pos"] = (
         (close - low60)
         /
         (high60 - low60)
-        .replace(0, np.nan)
+        .replace(
+            0,
+            np.nan
+        )
     )
 
     # Rupturas
@@ -635,7 +737,6 @@ FEATURES = [
 
     "dist_high20",
     "dist_high60",
-
     "dist_low20",
     "dist_low60",
 
@@ -664,22 +765,25 @@ def build_market_features():
             ticker
         )
 
-        if df is None or len(df) < 80:
+        if (
+            df is None
+            or
+            len(df) < 80
+        ):
             continue
 
-        f = add_features(df)
+        f = add_features(
+            df
+        )
 
         prefix = {
-
             "^GSPC": "sp",
             "^IXIC": "nd",
             "^DJI": "dj",
             "^VIX": "vix",
-
         }[ticker]
 
         cols = [
-
             "Close",
             "ret1",
             "ret5",
@@ -687,23 +791,28 @@ def build_market_features():
             "sma20",
             "sma50",
             "sma200",
-
         ]
 
-        m = f[cols].copy()
+        m = f[
+            cols
+        ].copy()
 
         m.columns = [
             f"{prefix}_{c}"
             for c in cols
         ]
 
-        market[prefix] = m
+        market[
+            prefix
+        ] = m
 
     if not market:
         return None
 
     combined = pd.concat(
-        list(market.values()),
+        list(
+            market.values()
+        ),
         axis=1
     ).sort_index()
 
@@ -722,7 +831,9 @@ def build_market_features():
             combined[
                 f"{prefix}_price_sma50"
             ] = (
-                combined[close_col]
+                combined[
+                    close_col
+                ]
                 /
                 combined[
                     f"{prefix}_sma50"
@@ -733,7 +844,9 @@ def build_market_features():
             combined[
                 f"{prefix}_price_sma200"
             ] = (
-                combined[close_col]
+                combined[
+                    close_col
+                ]
                 /
                 combined[
                     f"{prefix}_sma200"
@@ -754,7 +867,11 @@ def future_max_return(
     days=FORWARD_DAYS
 ):
 
-    if position >= len(close) - 1:
+    if (
+        position
+        >=
+        len(close) - 1
+    ):
         return np.nan, np.nan
 
     future = close.iloc[
@@ -765,7 +882,9 @@ def future_max_return(
     if future.empty:
         return np.nan, np.nan
 
-    base = close.iloc[position]
+    base = close.iloc[
+        position
+    ]
 
     returns = (
         future / base - 1
@@ -809,7 +928,8 @@ def find_events(df):
 
             candidates.append(
                 {
-                    "date": df.index[i],
+                    "date":
+                        df.index[i],
 
                     "future_date":
                         future_date,
@@ -828,13 +948,17 @@ def find_events(df):
 
     for event in candidates:
 
-        current_date = pd.Timestamp(
-            event["date"]
+        current_date = (
+            pd.Timestamp(
+                event["date"]
+            )
         )
 
         if last_date is None:
 
-            selected.append(event)
+            selected.append(
+                event
+            )
 
             last_date = (
                 current_date
@@ -848,7 +972,9 @@ def find_events(df):
             last_date
         ).days >= EVENT_SEPARATION_DAYS:
 
-            selected.append(event)
+            selected.append(
+                event
+            )
 
             last_date = (
                 current_date
@@ -867,15 +993,22 @@ def make_dataset(
 ):
 
     winners = []
-
     non_winners = []
 
-    for ticker, df in all_features.items():
+    for ticker, df in (
+        all_features.items()
+    ):
 
-        if df is None or len(df) < 250:
+        if (
+            df is None
+            or
+            len(df) < 250
+        ):
             continue
 
-        events = find_events(df)
+        events = find_events(
+            df
+        )
 
         winning_dates = set()
 
@@ -890,10 +1023,13 @@ def make_dataset(
             if d not in df.index:
                 continue
 
-            row = df.loc[d].copy()
+            row = df.loc[
+                d
+            ].copy()
 
             if (
-                market_features is not None
+                market_features
+                is not None
                 and
                 d in market_features.index
             ):
@@ -905,9 +1041,13 @@ def make_dataset(
                     ]
                 )
 
-            row["ticker"] = ticker
+            row["ticker"] = (
+                ticker
+            )
 
-            row["event_date"] = d
+            row["event_date"] = (
+                d
+            )
 
             row["future_return"] = (
                 e["future_return"]
@@ -917,9 +1057,13 @@ def make_dataset(
                 e["future_date"]
             )
 
-            winners.append(row)
+            winners.append(
+                row
+            )
 
-            winning_dates.add(d)
+            winning_dates.add(
+                d
+            )
 
         # ---------------- CONTROLES ----------------
 
@@ -932,20 +1076,21 @@ def make_dataset(
             ]
 
             if d not in winning_dates
-
         ]
 
-        # Un control cada 5 sesiones.
         selected_controls = (
             eligible[::5]
         )
 
         for d in selected_controls:
 
-            row = df.loc[d].copy()
+            row = df.loc[
+                d
+            ].copy()
 
             if (
-                market_features is not None
+                market_features
+                is not None
                 and
                 d in market_features.index
             ):
@@ -957,7 +1102,9 @@ def make_dataset(
                     ]
                 )
 
-            row["ticker"] = ticker
+            row["ticker"] = (
+                ticker
+            )
 
             row["event_date"] = (
                 pd.Timestamp(d)
@@ -982,7 +1129,9 @@ def make_dataset(
                 future_date
             )
 
-            non_winners.append(row)
+            non_winners.append(
+                row
+            )
 
     winners_df = pd.DataFrame(
         winners
@@ -1025,7 +1174,11 @@ def feature_separation(
         errors="coerce"
     ).dropna()
 
-    if len(w) < 5 or len(c) < 10:
+    if (
+        len(w) < 5
+        or
+        len(c) < 10
+    ):
         return None
 
     wm = w.median()
@@ -1054,13 +1207,14 @@ def feature_separation(
                 - 2,
                 1
             ),
-
             1e-12,
         )
     )
 
     separation = (
-        abs(wm - cm)
+        abs(
+            wm - cm
+        )
         /
         pooled
     )
@@ -1072,7 +1226,6 @@ def feature_separation(
     )
 
     return {
-
         "feature":
             feature,
 
@@ -1112,9 +1265,9 @@ def discover_patterns(
         )
 
         if r:
-            results.append(r)
-
-    # Variables de mercado
+            results.append(
+                r
+            )
 
     market_features = [
 
@@ -1130,7 +1283,6 @@ def discover_patterns(
                 "vix_",
             )
         )
-
     ]
 
     for feature in market_features:
@@ -1142,7 +1294,9 @@ def discover_patterns(
         )
 
         if r:
-            results.append(r)
+            results.append(
+                r
+            )
 
     if not results:
         return pd.DataFrame()
@@ -1206,7 +1360,6 @@ def build_feature_scales(
             or
             scale <= 1e-9
         ):
-
             scale = values.std()
 
         if (
@@ -1310,14 +1463,12 @@ def similarity(
     weighted_distance = (
         sum(
             d * w
-            for d, w
-            in features
+            for d, w in features
         )
         /
         sum(
             w
-            for _, w
-            in features
+            for _, w in features
         )
     )
 
@@ -1341,7 +1492,9 @@ def find_analogues(
 
     candidates = []
 
-    for _, historical in winners.iterrows():
+    for _, historical in (
+        winners.iterrows()
+    ):
 
         sim = similarity(
             current_row,
@@ -1357,7 +1510,6 @@ def find_analogues(
 
             candidates.append(
                 {
-
                     "similarity":
                         sim,
 
@@ -1393,7 +1545,7 @@ def find_analogues(
 
 
 # ============================================================
-# ENTRADA / STOP / OBJETIVOS
+# ENTRADA / PRECIO MÁXIMO / STOP / OBJETIVOS
 # ============================================================
 
 def calculate_trade_levels(
@@ -1413,35 +1565,32 @@ def calculate_trade_levels(
     )
 
     returns = np.array(
-
         [
             a["future_return"]
-
             for a in analogues
-
             if pd.notna(
                 a["future_return"]
             )
-
         ],
-
         dtype=float,
     )
 
-    if len(returns) < MIN_ANALOGS:
+    if (
+        len(returns)
+        <
+        MIN_ANALOGS
+    ):
         return None
 
-    # Percentiles de los casos
-    # históricos más parecidos.
+    # Percentiles históricos
 
     p25, p50, p75 = np.percentile(
         returns,
         [25, 50, 75]
     )
 
-    # Solo se considera una oportunidad
-    # si el escenario inferior conserva
-    # al menos +10%.
+    # El escenario inferior debe
+    # conservar al menos +10%.
 
     p25 = max(
         p25,
@@ -1453,7 +1602,9 @@ def calculate_trade_levels(
         p25
     )
 
-    # Objetivos
+    # --------------------------------------------------------
+    # OBJETIVOS
+    # --------------------------------------------------------
 
     target_low = (
         entry
@@ -1468,14 +1619,22 @@ def calculate_trade_levels(
     )
 
     # --------------------------------------------------------
-    # STOP
+    # PRECIO MÁXIMO DE COMPRA
     # --------------------------------------------------------
 
-    # Stop basado en volatilidad actual.
-    #
-    # Se utiliza ATR y se limita entre 2,5% y 8%.
-    #
-    # Es orientativo, no una garantía de pérdida máxima.
+    max_buy_price = (
+        target_low
+        /
+        (1 + MIN_REQUIRED_UPSIDE)
+    )
+
+    max_buy_price = float(
+        max_buy_price
+    )
+
+    # --------------------------------------------------------
+    # STOP
+    # --------------------------------------------------------
 
     if (
         np.isfinite(atr_pct)
@@ -1509,7 +1668,9 @@ def calculate_trade_levels(
         entry
     )
 
-    # Riesgo / beneficio
+    # --------------------------------------------------------
+    # RIESGO / BENEFICIO
+    # --------------------------------------------------------
 
     rr_low = (
         p25
@@ -1528,6 +1689,9 @@ def calculate_trade_levels(
         "entry":
             entry,
 
+        "max_buy_price":
+            max_buy_price,
+
         "target_low":
             target_low,
 
@@ -1536,6 +1700,9 @@ def calculate_trade_levels(
 
         "forecast_low":
             p25,
+
+        "forecast_median":
+            p50,
 
         "forecast_high":
             p75,
@@ -1715,22 +1882,39 @@ def load_state():
 def save_state(state):
 
     STATE_FILE.write_text(
-
         json.dumps(
             state,
             indent=2,
             ensure_ascii=False
         ),
-
         encoding="utf-8"
     )
 
 
 # ============================================================
-# TELEGRAM
+# TELEGRAM + DEGIRO
 # ============================================================
 
-def send_telegram(text):
+def get_degiro_url(ticker):
+
+    """
+    Devuelve la página concreta de DEGIRO
+    cuando tenemos una URL oficial verificada.
+
+    Si todavía no tenemos una URL concreta
+    para ese ticker, devuelve DEGIRO general.
+    """
+
+    return DEGIRO_URLS.get(
+        ticker,
+        DEGIRO_GENERAL_URL
+    )
+
+
+def send_telegram(
+    text,
+    ticker=None
+):
 
     if (
         not TELEGRAM_BOT_TOKEN
@@ -1753,25 +1937,68 @@ def send_telegram(text):
         "/sendMessage"
     )
 
+    # --------------------------------------------------------
+    # BOTÓN DEGIRO
+    # --------------------------------------------------------
+
+    reply_markup = None
+
+    if ticker:
+
+        degiro_url = get_degiro_url(
+            ticker
+        )
+
+        reply_markup = {
+
+            "inline_keyboard": [
+
+                [
+
+                    {
+                        "text":
+                            f"🟢 ABRIR {ticker} EN DEGIRO",
+
+                        "url":
+                            degiro_url,
+                    }
+
+                ]
+
+            ]
+
+        }
+
     try:
 
+        payload = {
+
+            "chat_id":
+                TELEGRAM_CHAT_ID,
+
+            "text":
+                text,
+        }
+
+        if reply_markup:
+
+            payload[
+                "reply_markup"
+            ] = reply_markup
+
         response = requests.post(
-
             url,
-
-            json={
-
-                "chat_id":
-                    TELEGRAM_CHAT_ID,
-
-                "text":
-                    text,
-            },
-
+            json=payload,
             timeout=20,
         )
 
         if response.ok:
+
+            print(
+                f"[TELEGRAM] Alerta enviada "
+                f"para {ticker}"
+            )
+
             return True
 
         print(
@@ -1792,10 +2019,14 @@ def send_telegram(text):
 
 
 # ============================================================
-# FORMATO
+# FORMATO DE PRECIOS
 # ============================================================
 
 def fmt_price(value):
+
+    value = float(
+        value
+    )
 
     if value >= 1000:
 
@@ -1826,39 +2057,91 @@ def fmt_price(value):
 
 def make_alert(
     ticker,
-    trade
+    trade,
+    score,
+    analogues,
+    median_similarity
 ):
+
+    entry = trade[
+        "entry"
+    ]
+
+    max_buy = trade[
+        "max_buy_price"
+    ]
+
+    # --------------------------------------------------------
+    # INDICACIÓN CLARA DE SI EL PRECIO ACTUAL CUMPLE
+    # --------------------------------------------------------
+
+    if entry <= max_buy:
+
+        buy_status = (
+            "🟢 PRECIO ACTUAL DENTRO "
+            "DEL MÁXIMO"
+        )
+
+    else:
+
+        buy_status = (
+            "🔴 PRECIO ACTUAL POR ENCIMA "
+            "DEL MÁXIMO"
+        )
 
     return (
 
-        "🚨 OPORTUNIDAD\n\n"
+        "🚨 MEJOR CHOLLO DETECTADO\n\n"
 
         f"{ticker} — "
         f"{NAMES.get(ticker, ticker)}\n\n"
 
-        f"Entrada: "
-        f"{fmt_price(trade['entry'])}\n"
+        f"💵 Precio actual: "
+        f"{fmt_price(entry)}\n"
 
-        f"Objetivo estimado: "
-        f"{fmt_price(trade['target_low'])}"
-        "–"
-        f"{fmt_price(trade['target_high'])}\n"
+        f"🎯 PRECIO MÁXIMO DE COMPRA: "
+        f"{fmt_price(max_buy)}\n"
 
-        f"Previsión: "
-        f"+{trade['forecast_low'] * 100:.0f}%"
-        " / "
+        f"{buy_status}\n\n"
+
+        f"📊 Score: "
+        f"{score * 100:.0f}/100\n"
+
+        f"🔎 Analogías históricas: "
+        f"{analogues}\n"
+
+        f"📐 Similitud mediana: "
+        f"{median_similarity * 100:.1f}%\n\n"
+
+        f"📈 Previsión inferior: "
+        f"+{trade['forecast_low'] * 100:.0f}%\n"
+
+        f"📈 Previsión central: "
+        f"+{trade['forecast_median'] * 100:.0f}%\n"
+
+        f"📈 Previsión superior: "
         f"+{trade['forecast_high'] * 100:.0f}%\n\n"
 
-        f"Stop orientativo: "
+        f"🎯 Objetivo estimado: "
+        f"{fmt_price(trade['target_low'])}"
+        " – "
+        f"{fmt_price(trade['target_high'])}\n\n"
+
+        f"🛑 Stop orientativo: "
         f"{fmt_price(trade['stop'])}\n"
 
-        f"Riesgo: "
+        f"⚠️ Riesgo: "
         f"-{trade['risk_pct'] * 100:.1f}%\n"
 
-        f"Riesgo/Beneficio: "
+        f"📐 Riesgo/Beneficio: "
         f"1:{trade['rr_low']:.1f}"
         " / "
-        f"1:{trade['rr_high']:.1f}"
+        f"1:{trade['rr_high']:.1f}\n\n"
+
+        "ℹ️ El precio máximo es el nivel calculado "
+        "para conservar un potencial mínimo del "
+        f"{MIN_REQUIRED_UPSIDE * 100:.0f}% "
+        "según el escenario inferior del modelo."
     )
 
 
@@ -1887,8 +2170,14 @@ def main():
     )
 
     print(
-        "Máximo de alertas hoy: "
+        "Máximo de alertas por día: "
         f"{MAX_DAILY_ALERTS}"
+    )
+
+    print(
+        "Precio máximo: "
+        f"mínimo +{MIN_REQUIRED_UPSIDE * 100:.0f}% "
+        "en escenario inferior"
     )
 
     print(
@@ -1935,7 +2224,9 @@ def main():
 
         all_features[
             ticker
-        ] = add_features(raw)
+        ] = add_features(
+            raw
+        )
 
     print()
 
@@ -1975,7 +2266,11 @@ def main():
         f"{len(controls)}"
     )
 
-    if len(winners) < MIN_ANALOGS:
+    if (
+        len(winners)
+        <
+        MIN_ANALOGS
+    ):
 
         print(
             "[INFO] Todavía no hay "
@@ -2032,7 +2327,6 @@ def main():
     )
 
     print(
-
         ranking[
             [
                 "feature",
@@ -2044,7 +2338,6 @@ def main():
         .to_string(
             index=False
         )
-
     )
 
     # --------------------------------------------------------
@@ -2185,11 +2478,9 @@ def main():
             )
         )
 
-        # Puntuación interna para decidir
-        # cuáles son las 4 coincidencias
-        # más fuertes.
-        #
-        # NO se muestra al usuario.
+        # ----------------------------------------------------
+        # SCORE INTERNO 0-1
+        # ----------------------------------------------------
 
         score = (
 
@@ -2258,7 +2549,9 @@ def main():
             "suficientes en esta ejecución."
         )
 
-        save_state(state)
+        save_state(
+            state
+        )
 
         return
 
@@ -2272,8 +2565,10 @@ def main():
         reverse=True
     )
 
+    # SOLO EL MEJOR
+
     selected = opportunities[
-        :remaining_slots
+        :1
     ]
 
     print()
@@ -2284,12 +2579,12 @@ def main():
     )
 
     print(
-        f"Alertas que se enviarán ahora: "
-        f"{len(selected)}"
+        "Se enviará únicamente "
+        "la mejor oportunidad."
     )
 
     # --------------------------------------------------------
-    # ENVIAR UNA POR UNA
+    # ENVIAR SOLO EL MEJOR
     # --------------------------------------------------------
 
     for opportunity in selected:
@@ -2302,9 +2597,26 @@ def main():
             opportunity["trade"]
         )
 
+        score = (
+            opportunity["score"]
+        )
+
+        analogues = (
+            opportunity["analogues"]
+        )
+
+        median_similarity = (
+            opportunity[
+                "median_similarity"
+            ]
+        )
+
         message = make_alert(
             ticker,
-            trade
+            trade,
+            score,
+            analogues,
+            median_similarity
         )
 
         print()
@@ -2314,7 +2626,8 @@ def main():
         )
 
         ok = send_telegram(
-            message
+            message,
+            ticker=ticker
         )
 
         if ok:
